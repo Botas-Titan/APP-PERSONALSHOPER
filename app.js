@@ -763,7 +763,7 @@ function renderBoard() {
   board.querySelectorAll(".box-retiro").forEach(b =>
     b.addEventListener("click", e => { e.stopPropagation(); notifyRetiro(b.dataset.retirocli); }));
   board.querySelectorAll(".wa-venc").forEach(el =>
-    el.addEventListener("click", e => { e.stopPropagation(); notifyVencimiento([el.dataset.waventid]); }));
+    el.addEventListener("click", e => { e.stopPropagation(); notifyVencimiento(idsParaNotificar(el.dataset.waventid)); }));
   board.querySelectorAll(".inv-check").forEach(el =>
     el.addEventListener("click", e => { e.stopPropagation(); toggleInvSelect(el.dataset.inv); }));
   board.querySelectorAll(".btn-advance").forEach(b =>
@@ -1096,6 +1096,19 @@ function buildVencimientoText(orders, c) {
 }
 
 // Notifica por WhatsApp el vencimiento de uno o varios productos (deben ser del MISMO cliente)
+// Si el producto que tocaste está marcado (✓) y hay más marcados del mismo cliente
+// y proceso, junta todos esos ids; si no, devuelve solo el suyo (comportamiento normal).
+function idsParaNotificar(id) {
+  const o = ORDERS.find(x => x.id === id);
+  if (!o || !invoiceSelection.has(id)) return [id];
+  const numero = (o.cliente || {}).numero;
+  const juntos = [...invoiceSelection].filter(sid => {
+    const so = ORDERS.find(x => x.id === sid);
+    return so && so.status === o.status && (so.cliente || {}).numero === numero;
+  });
+  return juntos.length ? juntos : [id];
+}
+
 function notifyVencimiento(ids) {
   const orders = ids.map(id => ORDERS.find(o => o.id === id)).filter(Boolean);
   if (!orders.length) return;
