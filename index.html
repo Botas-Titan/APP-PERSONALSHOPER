@@ -44,6 +44,7 @@
         <button class="tab" data-view="nueva">＋ Nueva orden</button>
         <button class="tab" data-view="clientes">Clientes</button>
         <button class="tab" data-view="historial">Historial</button>
+        <button class="tab" data-view="arqueo" data-role="admin">Arqueo</button>
         <button class="tab" data-view="dashboard" data-role="admin">Dashboard</button>
         <button class="tab" data-view="usuarios" data-role="admin">Usuarios</button>
       </nav>
@@ -101,6 +102,10 @@
               </label>
               <label>Abono inicial (COP)
                 <input type="text" inputmode="numeric" id="abono" placeholder="200.000" />
+                <span class="pay-seg" id="abonoMedioSeg">
+                  <label class="pay-opt"><input type="radio" name="abonoMedio" value="transferencia" /><span>🏦 Transferencia</span></label>
+                  <label class="pay-opt"><input type="radio" name="abonoMedio" value="efectivo" /><span>💵 Efectivo</span></label>
+                </span>
               </label>
               <label>Saldo pendiente
                 <input type="text" id="saldoView" readonly class="readonly" />
@@ -169,17 +174,65 @@
           <input type="search" id="searchClients" placeholder="Buscar cliente por nombre, N°, teléfono o ciudad…" />
           <button id="exportClientsBtn" class="btn-secondary">⬇ Exportar clientes (Excel)</button>
         </div>
+        <div class="toolbar cli-buy-bar">
+          <span class="cli-buy-title">🛍️ Clientes que compraron</span>
+          <label class="inline-lbl">Desde <input type="date" id="cliBuyFrom" /></label>
+          <label class="inline-lbl">Hasta <input type="date" id="cliBuyTo" /></label>
+          <button id="cliBuyMonth" class="btn-secondary" type="button">Último mes</button>
+          <button id="cliBuyClear" class="btn-ghost" type="button">Quitar filtro</button>
+          <span id="cliBuyCount" class="file-note"></span>
+        </div>
         <div id="clientsTableWrap" class="table-wrap"></div>
       </section>
 
       <!-- ---------- VISTA HISTORIAL ---------- -->
       <section id="view-historial" class="view hidden">
-        <div class="toolbar">
-          <input type="search" id="searchHistorial" placeholder="Buscar en historial por cliente, producto o guía…" />
-          <button id="exportHistorialBtn" class="btn-secondary">⬇ Exportar historial (Excel)</button>
+        <div class="hist-tabs">
+          <button class="hist-tab active" data-htab="entregados">Pedidos entregados</button>
+          <button class="hist-tab" data-htab="cajas">📦 Cajas recibidas</button>
+          <button class="hist-tab" data-htab="compras">🛒 Compras por fecha</button>
         </div>
-        <p class="section-note">Los pedidos <strong>entregados</strong> pasan aquí automáticamente al día siguiente, para no saturar el tablero de procesos.</p>
-        <div id="historialWrap"></div>
+
+        <div id="htab-entregados">
+          <div class="toolbar">
+            <input type="search" id="searchHistorial" placeholder="Buscar en historial por cliente, producto o guía…" />
+            <button id="exportHistorialBtn" class="btn-secondary">⬇ Exportar historial (Excel)</button>
+          </div>
+          <p class="section-note">Los pedidos <strong>entregados</strong> pasan aquí automáticamente al día siguiente, para no saturar el tablero de procesos.</p>
+          <div id="historialWrap"></div>
+        </div>
+
+        <div id="htab-cajas" class="hidden">
+          <div class="toolbar">
+            <input type="search" id="searchCajas" placeholder="Buscar caja, guía, cliente o producto…" />
+          </div>
+          <p class="section-note">Cuando una caja se recibe en Colombia, su registro se conserva aquí <strong>30 días</strong> con todos los productos que traía y dónde está hoy cada uno.</p>
+          <div id="cajasWrap"></div>
+        </div>
+
+        <div id="htab-compras" class="hidden">
+          <div class="toolbar">
+            <label class="inline-lbl">Fecha <input type="date" id="comprasFecha" /></label>
+            <button id="comprasHoy" class="btn-secondary" type="button">Hoy</button>
+            <button id="comprasAyer" class="btn-secondary" type="button">Ayer</button>
+          </div>
+          <p class="section-note">Elige una fecha para ver qué productos se <strong>compraron</strong> ese día.</p>
+          <div id="comprasWrap"></div>
+        </div>
+      </section>
+
+      <!-- ---------- VISTA ARQUEO CONTABLE (solo admin) ---------- -->
+      <section id="view-arqueo" class="view hidden">
+        <div class="toolbar">
+          <label class="inline-lbl">Desde <input type="date" id="arqFrom" /></label>
+          <label class="inline-lbl">Hasta <input type="date" id="arqTo" /></label>
+          <label class="inline-lbl">Dólar (COP) <input type="text" inputmode="numeric" id="arqTrm" placeholder="4.000" style="width:90px" /></label>
+          <input type="search" id="arqSearch" placeholder="Buscar producto o cliente…" />
+          <button id="arqClear" class="btn-ghost" type="button">Limpiar</button>
+        </div>
+        <p class="section-note">Costo = lo registrado en USD al comprar × el dólar que escribas aquí. Venta = valor del producto. Ganancia = venta − costo.</p>
+        <div id="arqStats" class="stats-row"></div>
+        <div id="arqWrap" class="table-wrap"></div>
       </section>
 
       <!-- ---------- VISTA DASHBOARD ---------- -->

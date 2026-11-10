@@ -716,3 +716,61 @@ label select:focus { outline: 2px solid var(--accent); border-color: transparent
   .stat .lbl { font-size: 11px; }
   h2 { font-size: 18px; }
 }
+
+/* ===================== PRUEBAS NOV: medio de pago, desglose de abonos, historial, arqueo ===================== */
+/* Selector Transferencia / Efectivo */
+.pay-seg { display: flex; gap: 6px; margin-top: 8px; flex-wrap: wrap; }
+.pay-opt { flex: 1 1 120px; margin: 0; cursor: pointer; }
+.pay-opt input { position: absolute; opacity: 0; pointer-events: none; }
+.pay-opt span {
+  display: block; text-align: center; padding: 9px 10px; border: 1px solid var(--line-strong);
+  border-radius: 10px; background: var(--card); color: var(--muted); font-size: 12.5px; font-weight: 700;
+}
+.pay-opt input:checked + span { background: var(--accent); color: #fff; border-color: var(--accent); }
+.pay-opt input:focus-visible + span { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+/* Desglose de abonos desplegable (Cuenta del cliente) */
+.abonos-det { border-bottom: 1px solid var(--line); }
+.abonos-det summary {
+  display: flex; justify-content: space-between; gap: 10px; padding: 6px 0; cursor: pointer;
+  font-size: 13px; list-style: none;
+}
+.abonos-det summary::-webkit-details-marker { display: none; }
+.abonos-det summary span:first-child { color: var(--muted); }
+.abonos-det summary span:first-child::before { content: "▸ "; font-size: 10px; }
+.abonos-det[open] summary span:first-child::before { content: "▾ "; }
+.abonos-det summary span:last-child { font-weight: 600; }
+.abono-prod { font-size: 12px; font-weight: 700; margin: 8px 0 2px; }
+.abono-prod small { color: var(--muted); font-weight: 500; }
+.abono-line { padding-left: 10px; }
+.detail-row small { color: var(--muted-2); font-size: 11px; }
+
+/* Historial: pestañas y cajas recibidas */
+.hist-tabs { display: flex; gap: 8px; margin-bottom: 14px; flex-wrap: wrap; }
+.hist-tab {
+  flex: 1 1 140px; padding: 10px 12px; border-radius: 10px; border: 1px solid var(--line-strong);
+  background: var(--card); font-size: 13px; font-weight: 700; color: var(--muted); cursor: pointer;
+}
+.hist-tab.active { background: var(--accent); color: #fff; border-color: var(--accent); }
+.caja-hist { background: var(--card); border: 1px solid var(--line); border-radius: 12px; margin-bottom: 10px; overflow: hidden; box-shadow: var(--shadow-sm); }
+.caja-hist-head { display: flex; align-items: flex-start; gap: 9px; padding: 12px 14px; cursor: pointer; }
+.caja-hist-head:hover { background: var(--bg-soft); }
+.caja-hist-name { flex: 1; min-width: 0; font-weight: 700; font-size: 13.5px; overflow-wrap: anywhere; }
+.caja-hist-name small { display: block; font-weight: 500; color: var(--muted); font-size: 11.5px; margin-top: 2px; }
+.caja-hist-items { border-top: 1px solid var(--line); padding: 8px 10px 10px; display: flex; flex-direction: column; gap: 8px; }
+.caja-hist-items.hidden { display: none; }
+.caja-hist-item { display: flex; align-items: center; gap: 10px; padding: 9px 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--bg-soft); }
+.caja-hist-item .info { flex: 1; min-width: 0; }
+.caja-hist-item .pname { font-size: 13px; font-weight: 700; }
+.caja-hist-item .cname { font-size: 11.5px; color: var(--muted); }
+.status-pill { font-size: 10.5px; font-weight: 700; padding: 3px 9px; border-radius: 20px; white-space: nowrap; background: var(--panel); border: 1px solid var(--line-strong); }
+.status-pill.st-entregado { background: #eafaf0; color: #15803d; border-color: #bbf0cf; }
+.status-pill.st-enviado_col { background: #fff4e5; color: #a15c00; border-color: #f6dcae; }
+.status-pill.st-recibido_col { background: #eef1ff; color: #3730a3; border-color: #d7dcff; }
+.eye-btn { width: 30px; height: 30px; border-radius: 8px; border: 1px solid var(--line-strong); background: var(--card); cursor: pointer; font-size: 14px; flex: 0 0 auto; }
+.eye-btn:hover { border-color: var(--text); }
+
+/* Barra "clientes que compraron" */
+.cli-buy-bar { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 10px 14px; }
+.cli-buy-title { font-size: 13px; font-weight: 700; margin-right: 4px; }
+@media (max-width: 640px) { .cli-buy-bar .inline-lbl { flex: 1 1 140px; } }

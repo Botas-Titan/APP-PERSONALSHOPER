@@ -122,6 +122,43 @@ function getAbonos(o) {
 const abonoTotal = o => getAbonos(o).reduce((a, x) => a + (Number(x.monto) || 0), 0);
 const saldoDe = o => (o.valor || 0) - abonoTotal(o);
 
+/* Medio de pago de un abono: "transferencia" | "efectivo" (los abonos antiguos no lo tienen) */
+const MEDIO_LABEL = { transferencia: "🏦 Transferencia", efectivo: "💵 Efectivo" };
+const medioLabel = m => MEDIO_LABEL[m] || "Sin medio";
+// Lee el medio elegido en un grupo de radios (devuelve null si no se eligió)
+function readMedio(name) {
+  const el = document.querySelector(`input[name='${name}']:checked`);
+  return el ? el.value : null;
+}
+// Selector "Transferencia / Efectivo" reutilizable (HTML)
+function medioSegHTML(name) {
+  return `<span class="pay-seg">
+    <label class="pay-opt"><input type="radio" name="${name}" value="transferencia" /><span>🏦 Transferencia</span></label>
+    <label class="pay-opt"><input type="radio" name="${name}" value="efectivo" /><span>💵 Efectivo</span></label>
+  </span>`;
+}
+
+/* Orden automático para aplicar abonos generales:
+   1° pedidos que ya están en Cúcuta · 2° pedidos viajando · 3° pedidos por comprar.
+   (Dentro de cada grupo, el más antiguo primero.) */
+function prioridadAbono(o) {
+  if (o.status === "recibido_col" || o.status === "enviado_col") return 1;   // en Cúcuta
+  if (o.status === "enviado" || o.status === "por_enviar") return 2;          // viajando
+  return 3;                                                                   // por comprar / por empacar
+}
+const PRIORIDAD_LABEL = { 1: "En Cúcuta", 2: "Viajando", 3: "Por comprar" };
+
+/* Fecha en que se COMPRÓ un producto (para "Compras por fecha").
+   Nuevos: o.fechaCompra. Antiguos: se deduce del historial. */
+function compraTs(o) {
+  const h = o.historial || {};
+  const t = tsMillis(o.fechaCompra) || tsMillis(h.por_empacar) ||
+    (o.tipoCompra === "directa" ? tsMillis(h.recibido_col) : 0);
+  return t || 0;
+}
+// "YYYY-MM-DD" en hora local
+const ymd = ts => { const d = new Date(tsMillis(ts)); return d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0") + "-" + String(d.getDate()).padStart(2, "0"); };
+
 /* ---------- ¿Está archivado (entregado en un día anterior)? ---------- */
 function isArchived(o) {
   if (o.status !== "entregado") return false;
@@ -327,8 +364,9 @@ function connBanner(msg) {
 function renderAll() {
   renderBoard(); renderStats();
   // Historial y Dashboard son pesados: solo se redibujan si es la vista activa
-  if (currentView === "historial") renderHistorial();
+  if (currentView === "historial") renderHistorialTabs();
   if (currentView === "dashboard") renderDashboard();
+  if (currentView === "arqueo") renderArqueo();
 }
 
 /* ============================================================
@@ -471,7 +509,7 @@ function setupNav() {
 }
 function showView(view) {
   // Bloquea solo Dashboard y Usuarios para la colaboradora (lo demás sí lo puede usar)
-  if (CURRENT.role !== "admin" && (view === "dashboard" || view === "usuarios")) view = "tablero";
+  if (CURRENT.role !== "admin" && (view === "dashboard" || view === "usuarios" || view === "arqueo")) view = "tablero";
   currentView = view;
   document.querySelectorAll(".tab").forEach(t =>
     t.classList.toggle("active", t.dataset.view === view));
@@ -479,8 +517,10 @@ function showView(view) {
   document.getElementById("view-" + view).classList.remove("hidden");
   if (view === "nueva" && !editingOrderId) resetOrderForm();
   // Redibujar la vista pesada solo al entrar en ella
-  if (view === "historial") renderHistorial();
+  if (view === "historial") renderHistorialTabs();
   if (view === "dashboard") renderDashboard();
+  if (view === "arqueo") renderArqueo();
+  if (view === "clientes") renderClientsTable();
 }
 
 /* ============================================================
@@ -1249,14 +1289,15 @@ function openOrderModal(id) {
   // Listado de abonos
   const abonos = getAbonos(o);
   const abonosHTML = abonos.length
-    ? abonos.map((a, i) => `<div class="detail-row"><span class="k">Abono ${i + 1} · ${fmtDate(a.fecha)}</span><span>${COP(a.monto)} <button class="mini-btn abono-edit" data-editabono="${i}" title="Corregir o eliminar este abono">✎</button></span></div>`).join("")
+    ? abonos.map((a, i) => `<div class="detail-row"><span class="k">Abono ${i + 1} · ${fmtDate(a.fecha)}<br><small>${medioLabel(a.medio)}</small></span><span>${COP(a.monto)} <button class="mini-btn abono-edit" data-editabono="${i}" title="Corregir, cambiar medio o pasar a otro producto">✎</button></span></div>`).join("")
     : `<div class="detail-row"><span class="k">Sin abonos aún</span><span></span></div>`;
 
   const abonoAddUI = saldo > 0 ? `
     <div class="guia-input-row" style="margin-top:8px">
       <input type="text" inputmode="numeric" id="nuevoAbono" placeholder="Registrar nuevo abono (COP)" />
       <button class="btn-primary" id="addAbonoBtn">Abonar</button>
-    </div>` : "";
+    </div>
+    ${medioSegHTML("nuevoAbonoMedio")}` : "";
 
   // Casilla de costo (USD) — se captura al avanzar a "Por empacar" (solo admin)
   const costInput = isAdmin ? `
@@ -1394,7 +1435,7 @@ function openOrderModal(id) {
   const addAb = document.getElementById("addAbonoBtn");
   if (addAb) addAb.addEventListener("click", () => addAbono(o.id));
   document.getElementById("orderModalBody").querySelectorAll("[data-editabono]").forEach(b =>
-    b.addEventListener("click", () => editAbono(o.id, Number(b.dataset.editabono))));
+    b.addEventListener("click", () => editAbono(o.id, Number(b.dataset.editabono), () => setTimeout(() => openOrderModal(o.id), 250))));
   const nuevoAb = document.getElementById("nuevoAbono");
   if (nuevoAb) nuevoAb.addEventListener("input", e => { e.target.value = fmtThousands(e.target.value); });
   const editB = document.getElementById("editOrderBtn");
@@ -1410,13 +1451,15 @@ async function addAbono(id) {
   if (!o) return;
   const monto = parseNum(document.getElementById("nuevoAbono").value);
   if (!monto) { alert("Escribe el valor del abono."); return; }
+  const medio = readMedio("nuevoAbonoMedio");
+  if (!medio) { alert("Elige cómo pagó: Transferencia o Efectivo."); return; }
   // El abono se aplica hasta cubrir el saldo del pedido; lo que sobre pasa al
   // "saldo a favor" del cliente (para futuras compras).
   const saldoActual = Math.max(0, saldoDe(o));
   const paraOrden = Math.min(monto, saldoActual);
   const excedente = monto - paraOrden;
   const abonos = getAbonos(o).slice();
-  if (paraOrden > 0) abonos.push({ monto: paraOrden, fecha: Date.now() });
+  if (paraOrden > 0) abonos.push({ monto: paraOrden, fecha: Date.now(), medio });
   const total = abonos.reduce((a, x) => a + (Number(x.monto) || 0), 0);
   const cli = CLIENTS.find(c => c.numero === (o.cliente || {}).numero);
   const nuevoCredito = (excedente > 0 && cli) ? (Number(cli.creditoFavor) || 0) + excedente : null;
@@ -1442,30 +1485,104 @@ async function addAbono(id) {
 }
 
 // Corregir o eliminar un abono ya registrado (por si se escribió un monto equivocado)
-async function editAbono(orderId, idx) {
+function abonoEditModalEl() {
+  let m = document.getElementById("abonoEditModal");
+  if (m) return m;
+  m = document.createElement("div");
+  m.id = "abonoEditModal";
+  m.className = "modal hidden";
+  m.innerHTML = `<div class="modal-card" style="max-width:440px">
+    <div class="modal-head"><button class="modal-close" id="closeAbonoEdit" aria-label="Cerrar">✕</button></div>
+    <div id="abonoEditBody"></div></div>`;
+  document.body.appendChild(m);
+  m.addEventListener("click", e => { if (e.target.id === "abonoEditModal") m.classList.add("hidden"); });
+  m.querySelector("#closeAbonoEdit").addEventListener("click", () => m.classList.add("hidden"));
+  return m;
+}
+
+// Modifica un abono: monto, medio de pago, o lo pasa a OTRO producto del mismo cliente.
+// (reopen = función a llamar después para refrescar la pantalla desde donde se abrió)
+function editAbono(orderId, idx, reopen) {
   const o = ORDERS.find(x => x.id === orderId);
   if (!o) return;
-  const abonos = getAbonos(o).slice();
+  const abonos = getAbonos(o);
   if (idx < 0 || idx >= abonos.length) return;
-  const actual = abonos[idx].monto;
-  const val = prompt("Corregir el monto de este abono (COP).\nEscribe 0 para eliminarlo:", actual);
-  if (val === null) return;
-  const monto = parseNum(val);
-  if (monto <= 0) abonos.splice(idx, 1);
-  else abonos[idx] = { ...abonos[idx], monto };
-  const total = abonos.reduce((a, x) => a + (Number(x.monto) || 0), 0);
+  const a = abonos[idx];
+  const numero = (o.cliente || {}).numero;
+  const hermanos = ORDERS.filter(x => (x.cliente || {}).numero === numero && x.status !== "entregado" || x.id === orderId)
+    .filter((x, i, arr) => arr.findIndex(y => y.id === x.id) === i);
+  const m = abonoEditModalEl();
+  m.querySelector("#abonoEditBody").innerHTML = `
+    <h2 style="margin:0 0 4px">Modificar abono</h2>
+    <div class="file-note" style="margin-bottom:10px">${fmtDate(a.fecha)} · de "${escapeHtml(o.productName)}"</div>
+    <label>Monto (COP)
+      <input type="text" inputmode="numeric" id="aeMonto" value="${fmtThousands(String(a.monto))}" />
+    </label>
+    <div class="field" style="margin-top:10px"><span class="field-cap">Medio de pago</span>
+      <span class="pay-seg">
+        <label class="pay-opt"><input type="radio" name="aeMedio" value="transferencia" ${a.medio === "transferencia" ? "checked" : ""}/><span>🏦 Transferencia</span></label>
+        <label class="pay-opt"><input type="radio" name="aeMedio" value="efectivo" ${a.medio === "efectivo" ? "checked" : ""}/><span>💵 Efectivo</span></label>
+      </span>
+    </div>
+    <label style="margin-top:10px">Asignar este dinero a:
+      <select id="aeDestino">
+        ${hermanos.map(x => `<option value="${x.id}" ${x.id === orderId ? "selected" : ""}>${escapeHtml(x.productName)} · ${statusLabel(x.status)} · ${saldoDe(x) > 0 ? "debe " + COP(saldoDe(x)) : "pagado"}</option>`).join("")}
+      </select>
+    </label>
+    <p id="aeMsg" class="form-msg"></p>
+    <div class="modal-actions">
+      <button class="btn-primary" id="aeGuardar">Guardar cambios</button>
+      <button class="btn-ghost" id="aeEliminar" style="color:var(--red);border-color:var(--red)">Eliminar abono</button>
+    </div>`;
+  m.classList.remove("hidden");
+  const monto = m.querySelector("#aeMonto");
+  monto.addEventListener("input", e => { e.target.value = fmtThousands(e.target.value); });
 
+  const refrescar = () => {
+    m.classList.add("hidden");
+    if (typeof reopen === "function") reopen(); else setTimeout(() => openOrderModal(orderId), 250);
+  };
+  m.querySelector("#aeGuardar").onclick = () => {
+    const nuevoMonto = parseNum(monto.value);
+    if (nuevoMonto <= 0) { m.querySelector("#aeMsg").className = "form-msg err"; m.querySelector("#aeMsg").textContent = "Escribe un monto (o usa Eliminar abono)."; return; }
+    const medio = readMedio("aeMedio") || a.medio || null;
+    guardarAbonoEditado(orderId, idx, { ...a, monto: nuevoMonto, medio }, m.querySelector("#aeDestino").value).then(refrescar);
+  };
+  m.querySelector("#aeEliminar").onclick = () => {
+    if (!confirm("¿Eliminar este abono? El dinero deja de contarse en el pedido.")) return;
+    guardarAbonoEditado(orderId, idx, null, orderId).then(refrescar);
+  };
+}
+
+// Aplica el cambio: nuevo=null elimina; destino distinto mueve el abono a otro producto.
+async function guardarAbonoEditado(orderId, idx, nuevo, destinoId) {
+  const src = ORDERS.find(x => x.id === orderId);
+  const srcAb = getAbonos(src).slice();
+  const cambios = {};   // id -> abonos[]
+  if (nuevo === null) { srcAb.splice(idx, 1); cambios[orderId] = srcAb; }
+  else if (destinoId === orderId) { srcAb[idx] = nuevo; cambios[orderId] = srcAb; }
+  else {
+    const dst = ORDERS.find(x => x.id === destinoId);
+    if (!dst) return;
+    srcAb.splice(idx, 1);
+    cambios[orderId] = srcAb;
+    cambios[destinoId] = [...getAbonos(dst), { ...nuevo, movidoDe: src.productName }];
+  }
+  const tot = arr => arr.reduce((s, x) => s + (Number(x.monto) || 0), 0);
   if (!FIREBASE_READY) {
-    const i = ORDERS.findIndex(x => x.id === orderId);
-    ORDERS[i].abonos = abonos; ORDERS[i].abono = total; ORDERS[i].updatedAt = Date.now();
-    saveLocal(); renderAllLocal(); openOrderModal(orderId);
+    Object.keys(cambios).forEach(id => {
+      const i = ORDERS.findIndex(x => x.id === id);
+      if (i >= 0) { ORDERS[i].abonos = cambios[id]; ORDERS[i].abono = tot(cambios[id]); ORDERS[i].updatedAt = Date.now(); }
+    });
+    saveLocal(); renderAllLocal();
     return;
   }
   try {
-    await db.collection("ordenes").doc(orderId).update({
-      abonos, abono: total, updatedAt: firebase.firestore.FieldValue.serverTimestamp() });
-    setTimeout(() => openOrderModal(orderId), 250);
-  } catch (e) { alert("No se pudo corregir el abono: " + e.message); }
+    const batch = db.batch();
+    Object.keys(cambios).forEach(id => batch.update(db.collection("ordenes").doc(id), {
+      abonos: cambios[id], abono: tot(cambios[id]), updatedAt: firebase.firestore.FieldValue.serverTimestamp() }));
+    await batch.commit();
+  } catch (e) { alert("No se pudo modificar el abono: " + e.message); }
 }
 
 async function advanceStatus(o) {
@@ -1494,6 +1611,7 @@ async function advanceStatus(o) {
       ORDERS[i].updatedAt = Date.now();
       ORDERS[i].historial = { ...(ORDERS[i].historial || {}), [next]: Date.now() };
       if (costoUsd != null) ORDERS[i].costoUsd = costoUsd;
+      if (o.tipoCompra === "tienda" && next === "por_empacar" && !ORDERS[i].fechaCompra) ORDERS[i].fechaCompra = Date.now();
       if (guiaUsa) ORDERS[i].guiaUsa = guiaUsa;
       if (tipoEnvio) ORDERS[i].tipoEnvio = tipoEnvio;
       if (guia) { ORDERS[i].guia = guia; ORDERS[i].rastreoActivo = tipoEnvio === "interrapidisimo"; }
@@ -1508,6 +1626,7 @@ async function advanceStatus(o) {
     [`historial.${next}`]: firebase.firestore.FieldValue.serverTimestamp(),
   };
   if (costoUsd != null) update.costoUsd = costoUsd;
+  if (o.tipoCompra === "tienda" && next === "por_empacar" && !o.fechaCompra) update.fechaCompra = firebase.firestore.FieldValue.serverTimestamp();
   if (guiaUsa) update.guiaUsa = guiaUsa;
   if (tipoEnvio) update.tipoEnvio = tipoEnvio;
   if (guia) { update.guia = guia; update.rastreoActivo = tipoEnvio === "interrapidisimo"; }
@@ -1522,13 +1641,14 @@ async function advanceStatus(o) {
 async function marcarComprado(id) {
   if (!FIREBASE_READY) {
     const i = ORDERS.findIndex(x => x.id === id);
-    if (i >= 0) { ORDERS[i].compradoOnline = true; ORDERS[i].updatedAt = Date.now(); }
+    if (i >= 0) { ORDERS[i].compradoOnline = true; ORDERS[i].fechaCompra = Date.now(); ORDERS[i].updatedAt = Date.now(); }
     saveLocal(); renderAllLocal(); openOrderModal(id);
     return;
   }
   try {
     await db.collection("ordenes").doc(id).update({
-      compradoOnline: true, updatedAt: firebase.firestore.FieldValue.serverTimestamp() });
+      compradoOnline: true, fechaCompra: firebase.firestore.FieldValue.serverTimestamp(),
+      updatedAt: firebase.firestore.FieldValue.serverTimestamp() });
     setTimeout(() => openOrderModal(id), 250);
   } catch (e) { alert("No se pudo marcar como comprado: " + e.message); }
 }
@@ -1735,7 +1855,12 @@ async function saveOrder(e) {
     return;
   }
   if (!tipoCompra) {
-    msg.className = "form-msg err"; msg.textContent = "Marca si es Compra en tienda o Compra Online.";
+    msg.className = "form-msg err"; msg.textContent = "Marca si es Compra en tienda, Compra Online o Compra Directa.";
+    return;
+  }
+  const abonoMedio = readMedio("abonoMedio");
+  if (!editingOrderId && abonoIni > 0 && !abonoMedio) {
+    msg.className = "form-msg err"; msg.textContent = "Elige cómo pagó el abono: Transferencia o Efectivo.";
     return;
   }
   if (!cliente.departamento) {
@@ -1788,7 +1913,7 @@ async function saveOrder(e) {
     // Abonos de una orden nueva: primero el crédito a favor, luego el abono inicial
     const abonosNuevos = [];
     if (creditoUsado > 0) abonosNuevos.push({ monto: creditoUsado, fecha: Date.now(), tipo: "credito" });
-    if (abonoIni > 0) abonosNuevos.push({ monto: abonoIni, fecha: Date.now() });
+    if (abonoIni > 0) abonosNuevos.push({ monto: abonoIni, fecha: Date.now(), medio: abonoMedio });
     const abonoSum = creditoUsado + abonoIni;
 
     if (FIREBASE_READY) {
@@ -1939,20 +2064,40 @@ function renderClientDatalist() {
   }
 }
 
+// Fechas de compra (creación de pedidos) de un cliente, más reciente primero
+function comprasDeCliente(numero) {
+  return ORDERS.filter(o => (o.cliente || {}).numero === numero).map(o => tsMillis(o.createdAt)).filter(Boolean).sort((a, b) => b - a);
+}
+// Clientes que cumplen búsqueda de texto + filtro "compraron entre fechas"
+function clientesFiltrados() {
+  const q = (document.getElementById("searchClients").value || "").toLowerCase().trim();
+  const from = document.getElementById("cliBuyFrom").value;
+  const to = document.getElementById("cliBuyTo").value;
+  const f = from ? new Date(from + "T00:00:00").getTime() : null;
+  const t = to ? new Date(to + "T23:59:59").getTime() : null;
+  return CLIENTS.filter(c => {
+    if (!clientMatches(c, q)) return false;
+    if (f == null && t == null) return true;
+    return comprasDeCliente(c.numero).some(ts => (f == null || ts >= f) && (t == null || ts <= t));
+  });
+}
+
 function renderClientsTable() {
-  const q = document.getElementById("searchClients").value.toLowerCase().trim();
-  const list = CLIENTS.filter(c => clientMatches(c, q));
+  const list = clientesFiltrados();
+  const filtrando = !!(document.getElementById("cliBuyFrom").value || document.getElementById("cliBuyTo").value);
+  const cnt = document.getElementById("cliBuyCount");
+  if (cnt) cnt.textContent = filtrando ? `${list.length} cliente(s) compraron en ese periodo` : "";
 
   if (!list.length) {
     document.getElementById("clientsTableWrap").innerHTML =
-      `<div class="empty-box">Sin clientes todavía.</div>`;
+      `<div class="empty-box">${filtrando ? "Ningún cliente compró en ese periodo." : "Sin clientes todavía."}</div>`;
     return;
   }
   const isAdmin = CURRENT.role === "admin";
   document.getElementById("clientsTableWrap").innerHTML = `
     <table>
       <thead><tr>
-        <th>N°</th><th>Nombre</th><th>Teléfono</th><th>Ciudad</th><th>Saldo</th><th>Pedidos</th><th></th>
+        <th>N°</th><th>Nombre</th><th>Teléfono</th><th>Ciudad</th><th>Última compra</th><th>Saldo</th><th>Pedidos</th><th></th>
       </tr></thead>
       <tbody>
         ${list.map(c => {
@@ -1965,6 +2110,7 @@ function renderClientsTable() {
           <td>${escapeHtml(c.nombre)}</td>
           <td>${escapeHtml(c.telefono)}</td>
           <td>${escapeHtml(c.ciudad || "")}</td>
+          <td>${(() => { const u = comprasDeCliente(c.numero)[0]; return u ? fmtDateDMY(u) : "—"; })()}</td>
           <td>${saldoTxt}</td>
           <td><button class="mini-btn ver" data-ver="${c.numero}">Ver (${cuenta.count})</button></td>
           <td><div class="user-actions">
@@ -2143,6 +2289,20 @@ function openClientAccount(numero) {
       }).join("")
     : `<div class="detail-row"><span class="k">Sin pedidos activos</span><span></span></div>`;
 
+  // Desglose: cada abono por producto, con fecha y medio de pago (desplegable)
+  const desglose = q.orders.filter(o => getAbonos(o).length).map(o => `
+    <div class="abono-prod">${escapeHtml(o.productName)} <small>· ${statusLabel(o.status)}</small></div>
+    ${getAbonos(o).map((a, i) => `
+      <div class="detail-row abono-line">
+        <span class="k">${fmtDate(a.fecha)}<br><small>${medioLabel(a.medio)}${a.tipo === "credito" ? " · saldo a favor" : ""}${a.movidoDe ? " · movido de " + escapeHtml(a.movidoDe) : ""}</small></span>
+        <span>${COP(a.monto)} <button class="mini-btn" data-acc-edit="${o.id}|${i}" title="Modificar este abono">✎</button></span>
+      </div>`).join("")}`).join("");
+  const abonadoRow = `
+    <details class="abonos-det">
+      <summary><span>Total abonado</span><span>${COP(q.abonado)}</span></summary>
+      ${desglose || `<div class="file-note" style="padding:8px 0">Sin abonos todavía.</div>`}
+    </details>`;
+
   const saldoLine = q.saldo > 0
     ? `<div class="detail-row"><span class="k" style="font-weight:700">Saldo pendiente TOTAL</span><span style="font-weight:800;color:var(--red)">${COP(q.saldo)}</span></div>`
     : q.credito > 0
@@ -2155,18 +2315,19 @@ function openClientAccount(numero) {
 
     <div class="detail-section-title">Resumen</div>
     <div class="detail-row"><span class="k">Total productos (${q.orders.length})</span><span>${COP(q.valor)}</span></div>
-    <div class="detail-row"><span class="k">Total abonado</span><span>${COP(q.abonado)}</span></div>
+    ${abonadoRow}
     ${saldoLine}
 
     <div class="detail-section-title">Pedidos</div>
     ${rows}
 
     <div class="detail-section-title">Registrar abono general</div>
-    <div class="file-note" style="margin-bottom:6px">Se reparte entre los pedidos pendientes (del más antiguo al más nuevo). Lo que sobre queda como saldo a favor del cliente.</div>
+    <div class="file-note" style="margin-bottom:6px">Se aplica en este orden: <b>1° pedidos en Cúcuta</b>, <b>2° pedidos viajando</b>, <b>3° pedidos por comprar</b> (el más antiguo primero en cada grupo). Lo que sobre queda como saldo a favor.</div>
     <div class="guia-input-row">
       <input type="text" inputmode="numeric" id="abonoGeneralInput" placeholder="Monto del abono (COP)" />
       <button class="btn-primary" id="aplicarAbonoGeneral">Aplicar</button>
     </div>
+    ${medioSegHTML("abonoGeneralMedio")}
     <p id="accountMsg" class="form-msg"></p>
 
     <div class="modal-actions" style="margin-top:14px">
@@ -2179,6 +2340,10 @@ function openClientAccount(numero) {
   const inp = m.querySelector("#abonoGeneralInput");
   if (inp) inp.addEventListener("input", e => { e.target.value = fmtThousands(e.target.value); });
   m.querySelector("#aplicarAbonoGeneral").addEventListener("click", () => aplicarAbonoGeneral(numero));
+  m.querySelectorAll("[data-acc-edit]").forEach(b => b.addEventListener("click", () => {
+    const [oid, i] = b.dataset.accEdit.split("|");
+    editAbono(oid, Number(i), () => setTimeout(() => openClientAccount(numero), 250));
+  }));
   m.querySelector("#accountPrintBtn").addEventListener("click", () => printAccountInvoice(numero));
   const wab = m.querySelector("#accountWaBtn");
   if (wab) wab.addEventListener("click", () => whatsappAccountInvoice(numero));
@@ -2191,9 +2356,13 @@ async function aplicarAbonoGeneral(numero) {
   const msg = document.getElementById("accountMsg"); msg.className = "form-msg";
   if (!monto) { msg.className = "form-msg err"; msg.textContent = "Escribe el monto del abono."; return; }
 
+  const medio = readMedio("abonoGeneralMedio");
+  if (!medio) { msg.className = "form-msg err"; msg.textContent = "Elige cómo pagó: Transferencia o Efectivo."; return; }
+
   const q = cuentaCliente(numero);
+  // Orden: 1° en Cúcuta, 2° viajando, 3° por comprar; dentro de cada grupo, el más antiguo primero
   const pendientes = q.orders.filter(o => saldoDe(o) > 0)
-    .sort((a, b) => tsMillis(a.createdAt) - tsMillis(b.createdAt));
+    .sort((a, b) => (prioridadAbono(a) - prioridadAbono(b)) || (tsMillis(a.createdAt) - tsMillis(b.createdAt)));
   let pool = monto;
   const cambios = [];   // { id, abonos, total }
   for (const o of pendientes) {
@@ -2202,7 +2371,7 @@ async function aplicarAbonoGeneral(numero) {
     const pay = Math.min(pool, s);
     if (pay <= 0) continue;
     const abonos = getAbonos(o).slice();
-    abonos.push({ monto: pay, fecha: Date.now(), tipo: "general" });
+    abonos.push({ monto: pay, fecha: Date.now(), tipo: "general", medio });
     cambios.push({ id: o.id, abonos, total: abonos.reduce((a, x) => a + (Number(x.monto) || 0), 0) });
     pool -= pay;
   }
@@ -2433,6 +2602,195 @@ function renderHistorial() {
 }
 
 /* ============================================================
+   HISTORIAL — pestañas: Entregados · Cajas recibidas (30 días) · Compras por fecha
+   ============================================================ */
+let histTab = "entregados";
+function setupHistorialTabs() {
+  document.querySelectorAll(".hist-tab").forEach(t => t.addEventListener("click", () => {
+    histTab = t.dataset.htab;
+    renderHistorialTabs();
+  }));
+  document.getElementById("searchCajas").addEventListener("input", renderCajasRecibidas);
+  const f = document.getElementById("comprasFecha");
+  f.addEventListener("change", renderComprasPorFecha);
+  document.getElementById("comprasHoy").addEventListener("click", () => { f.value = ymd(Date.now()); renderComprasPorFecha(); });
+  document.getElementById("comprasAyer").addEventListener("click", () => { f.value = ymd(Date.now() - 86400000); renderComprasPorFecha(); });
+}
+function renderHistorialTabs() {
+  document.querySelectorAll(".hist-tab").forEach(t => t.classList.toggle("active", t.dataset.htab === histTab));
+  ["entregados", "cajas", "compras"].forEach(k =>
+    document.getElementById("htab-" + k).classList.toggle("hidden", k !== histTab));
+  if (histTab === "entregados") renderHistorial();
+  if (histTab === "cajas") renderCajasRecibidas();
+  if (histTab === "compras") {
+    const f = document.getElementById("comprasFecha");
+    if (!f.value) f.value = ymd(Date.now());
+    renderComprasPorFecha();
+  }
+}
+
+// ¿El pedido ya llegó a Colombia (Recibido Col o más adelante)?
+const llegoAColombia = o => statusIndex(o.status) >= statusIndex("recibido_col");
+const DIAS_CAJA_HISTORIAL = 30;
+
+// Cajas recibidas en los últimos 30 días, con todos sus productos y dónde está cada uno hoy
+function renderCajasRecibidas() {
+  const wrap = document.getElementById("cajasWrap");
+  if (!wrap) return;
+  const q = document.getElementById("searchCajas").value.toLowerCase().trim();
+  const limite = Date.now() - DIAS_CAJA_HISTORIAL * 86400000;
+
+  // Agrupa por caja (guía + fecha de armado, para no mezclar dos cajas con el mismo nombre)
+  const cajas = {};
+  ORDERS.filter(o => o.guiaUsa).forEach(o => {
+    const dia = o.fechaCaja ? ymd(o.fechaCaja) : "s/f";
+    const key = o.guiaUsa + "|" + dia;
+    (cajas[key] = cajas[key] || { guia: o.guiaUsa, fecha: o.fechaCaja || (o.historial && o.historial.enviado), items: [] }).items.push(o);
+  });
+
+  let lista = Object.values(cajas).map(c => {
+    const recibidos = c.items.filter(llegoAColombia).map(o => tsMillis(o.historial && o.historial.recibido_col)).filter(Boolean);
+    c.recibidaTs = recibidos.length ? Math.min(...recibidos) : 0;
+    return c;
+  }).filter(c => c.recibidaTs && c.recibidaTs >= limite);
+
+  if (q) lista = lista.filter(c =>
+    (c.guia + " " + c.items.map(o => [o.productName, (o.cliente || {}).nombre].join(" ")).join(" ")).toLowerCase().includes(q));
+  lista.sort((a, b) => b.recibidaTs - a.recibidaTs);
+
+  if (!lista.length) {
+    wrap.innerHTML = `<div class="empty-box">No hay cajas recibidas en los últimos ${DIAS_CAJA_HISTORIAL} días.</div>`;
+    return;
+  }
+  wrap.innerHTML = lista.map((c, ci) => {
+    const restantes = Math.max(0, DIAS_CAJA_HISTORIAL - Math.floor((Date.now() - c.recibidaTs) / 86400000));
+    return `
+    <div class="caja-hist">
+      <div class="caja-hist-head" data-ci="${ci}">
+        <span class="box-caret">▸</span>
+        <span class="caja-hist-name">📦 ${c.fecha ? fmtDayShort(c.fecha) + " · " : ""}${escapeHtml(c.guia)}
+          <small>Recibida en Colombia el ${fmtDateDMY(c.recibidaTs)} · se conserva ${restantes} día(s) más</small></span>
+        <span class="box-count">${c.items.length}</span>
+      </div>
+      <div class="caja-hist-items hidden">
+        ${c.items.map(o => `
+          <div class="caja-hist-item">
+            <div class="info"><div class="pname">${escapeHtml(o.productName)}</div>
+              <div class="cname">#${(o.cliente || {}).numero ?? "—"} · ${escapeHtml((o.cliente || {}).nombre || "")}</div></div>
+            <span class="status-pill st-${o.status}">${statusLabel(o.status)}</span>
+            <button class="eye-btn" data-eye="${o.id}" title="Ver dónde está este producto">👁</button>
+          </div>`).join("")}
+      </div>
+    </div>`;
+  }).join("");
+
+  wrap.querySelectorAll(".caja-hist-head").forEach(h => h.addEventListener("click", () => {
+    const body = h.nextElementSibling; const open = body.classList.toggle("hidden") === false;
+    h.querySelector(".box-caret").textContent = open ? "▾" : "▸";
+  }));
+  wrap.querySelectorAll("[data-eye]").forEach(b => b.addEventListener("click", e => { e.stopPropagation(); openOrderModal(b.dataset.eye); }));
+}
+
+// Productos comprados en una fecha específica
+function renderComprasPorFecha() {
+  const wrap = document.getElementById("comprasWrap");
+  const fecha = document.getElementById("comprasFecha").value;
+  if (!wrap) return;
+  if (!fecha) { wrap.innerHTML = `<div class="empty-box">Elige una fecha.</div>`; return; }
+  const lista = ORDERS.filter(o => compraTs(o) && ymd(compraTs(o)) === fecha)
+    .sort((a, b) => compraTs(a) - compraTs(b));
+  const isAdmin = CURRENT.role === "admin";
+  if (!lista.length) { wrap.innerHTML = `<div class="empty-box">No se registraron compras el ${fecha.split("-").reverse().join("/")}.</div>`; return; }
+  const totalUsd = lista.reduce((a, o) => a + (Number(o.costoUsd) || 0), 0);
+  wrap.innerHTML = `
+    <div class="hist-day">
+      <div class="hist-day-head">
+        <span>${fmtDay(compraTs(lista[0]))}</span>
+        <span class="hist-count">${lista.length} producto(s) comprados${isAdmin ? " · " + USD(totalUsd) : ""}</span>
+      </div>
+      <div class="table-wrap"><table>
+        <thead><tr><th>N°</th><th>Cliente</th><th>Producto</th><th>Tienda</th><th>Tipo</th><th>Estado hoy</th>${isAdmin ? "<th>Costo USD</th>" : ""}</tr></thead>
+        <tbody>${lista.map(o => { const c = o.cliente || {}; return `
+          <tr class="hist-row" data-id="${o.id}">
+            <td>#${c.numero ?? "—"}</td><td>${escapeHtml(c.nombre || "")}</td><td>${escapeHtml(o.productName)}</td>
+            <td>${escapeHtml(o.tienda || "")}</td>
+            <td>${o.tipoCompra === "online" ? "Online" : o.tipoCompra === "directa" ? "Directa" : "Tienda"}</td>
+            <td>${statusLabel(o.status)}</td>
+            ${isAdmin ? `<td>${o.costoUsd ? USD(o.costoUsd) : "—"}</td>` : ""}
+          </tr>`; }).join("")}</tbody>
+      </table></div>
+    </div>`;
+  wrap.querySelectorAll(".hist-row").forEach(r => r.addEventListener("click", () => openOrderModal(r.dataset.id)));
+}
+
+/* ============================================================
+   ARQUEO CONTABLE (solo admin): costo · venta · ganancia por producto
+   ============================================================ */
+function getTrm() { try { return Number(localStorage.getItem("armadiusa_trm")) || 0; } catch { return 0; } }
+function setupArqueo() {
+  const trm = document.getElementById("arqTrm");
+  const t = getTrm(); if (t) trm.value = fmtThousands(String(t));
+  trm.addEventListener("input", () => {
+    trm.value = fmtThousands(trm.value);
+    try { localStorage.setItem("armadiusa_trm", String(parseNum(trm.value))); } catch {}
+    renderArqueo();
+  });
+  ["arqFrom", "arqTo"].forEach(id => document.getElementById(id).addEventListener("change", renderArqueo));
+  document.getElementById("arqSearch").addEventListener("input", renderArqueo);
+  document.getElementById("arqClear").addEventListener("click", () => {
+    ["arqFrom", "arqTo", "arqSearch"].forEach(id => document.getElementById(id).value = "");
+    renderArqueo();
+  });
+}
+function renderArqueo() {
+  const wrap = document.getElementById("arqWrap");
+  if (!wrap || CURRENT.role !== "admin") return;
+  const trm = parseNum(document.getElementById("arqTrm").value) || getTrm();
+  const from = document.getElementById("arqFrom").value, to = document.getElementById("arqTo").value;
+  const q = document.getElementById("arqSearch").value.toLowerCase().trim();
+  const f = from ? new Date(from + "T00:00:00").getTime() : null, t = to ? new Date(to + "T23:59:59").getTime() : null;
+
+  const lista = ORDERS.filter(o => {
+    const ts = tsMillis(o.createdAt);
+    if (f != null && ts < f) return false;
+    if (t != null && ts > t) return false;
+    if (q && ![o.productName, (o.cliente || {}).nombre, "#" + (o.cliente || {}).numero].filter(Boolean).join(" ").toLowerCase().includes(q)) return false;
+    return true;
+  }).sort((a, b) => tsMillis(b.createdAt) - tsMillis(a.createdAt));
+
+  const conCosto = lista.filter(o => Number(o.costoUsd) > 0);
+  const sinCosto = lista.length - conCosto.length;
+  const costoCop = o => (Number(o.costoUsd) || 0) * trm;
+  const totCosto = conCosto.reduce((a, o) => a + costoCop(o), 0);
+  const totVenta = conCosto.reduce((a, o) => a + (o.valor || 0), 0);
+  const totGan = totVenta - totCosto;
+  const margen = totVenta ? (totGan / totVenta * 100) : 0;
+
+  document.getElementById("arqStats").innerHTML = trm ? `
+    <div class="stat money"><div class="num">${COP(Math.round(totCosto))}</div><div class="lbl">Costo total (${conCosto.length} productos)</div></div>
+    <div class="stat money"><div class="num">${COP(totVenta)}</div><div class="lbl">Vendido</div></div>
+    <div class="stat money"><div class="num" style="color:${totGan < 0 ? "var(--con-fg,#b42318)" : "inherit"}">${COP(Math.round(totGan))}</div><div class="lbl">Ganancia · margen ${margen.toFixed(1)}%</div></div>
+    <div class="stat"><div class="num">${sinCosto}</div><div class="lbl">Sin costo registrado</div></div>`
+    : `<div class="empty-box" style="grid-column:1/-1">Escribe el valor del dólar (COP) arriba para calcular costos y ganancias.</div>`;
+
+  if (!lista.length) { wrap.innerHTML = `<div class="empty-box">Sin pedidos en ese filtro.</div>`; return; }
+  wrap.innerHTML = `<table>
+    <thead><tr><th>Fecha</th><th>Cliente</th><th>Producto</th><th>Costo USD</th><th>Costo COP</th><th>Venta</th><th>Ganancia</th><th>%</th></tr></thead>
+    <tbody>${lista.map(o => {
+      const c = o.cliente || {}, tieneCosto = Number(o.costoUsd) > 0;
+      const cc = costoCop(o), gan = (o.valor || 0) - cc;
+      return `<tr class="hist-row" data-id="${o.id}">
+        <td>${fmtDateDMY(o.createdAt)}</td><td>#${c.numero ?? "—"} ${escapeHtml(c.nombre || "")}</td><td>${escapeHtml(o.productName)}</td>
+        <td>${tieneCosto ? USD(o.costoUsd) : "<span class='file-note'>sin costo</span>"}</td>
+        <td>${tieneCosto && trm ? COP(Math.round(cc)) : "—"}</td>
+        <td>${COP(o.valor)}</td>
+        <td style="font-weight:700;color:${gan < 0 ? "var(--con-fg,#b42318)" : "inherit"}">${tieneCosto && trm ? COP(Math.round(gan)) : "—"}</td>
+        <td>${tieneCosto && trm && o.valor ? (gan / o.valor * 100).toFixed(0) + "%" : "—"}</td>
+      </tr>`; }).join("")}</tbody></table>`;
+  wrap.querySelectorAll(".hist-row").forEach(r => r.addEventListener("click", () => openOrderModal(r.dataset.id)));
+}
+
+/* ============================================================
    DASHBOARD
    ============================================================ */
 function setupDashboard() {
@@ -2506,9 +2864,11 @@ function renderDashboard() {
    EXPORTAR A EXCEL (SheetJS)
    ============================================================ */
 function exportClients() {
-  if (!CLIENTS.length) { alert("No hay clientes para exportar."); return; }
-  const rows = CLIENTS.map(c => ({
+  const lista = clientesFiltrados();   // respeta búsqueda y filtro por fecha de compra
+  if (!lista.length) { alert("No hay clientes para exportar."); return; }
+  const rows = lista.map(c => ({
     "N° cliente": c.numero, Nombre: c.nombre, Cédula: c.cedula || "", Teléfono: c.telefono, "Red social": c.red || "",
+    "Última compra": (() => { const u = comprasDeCliente(c.numero)[0]; return u ? fmtDateDMY(u) : ""; })(),
     Dirección: c.direccion, Barrio: c.barrio, "Punto de referencia": c.referencia || "",
     Ciudad: c.ciudad, Departamento: c.departamento || c.municipio || "",
   }));
@@ -2875,8 +3235,18 @@ document.addEventListener("DOMContentLoaded", () => {
   setupFilters();
   setupOrderForm();
   setupHistorial();
+  setupHistorialTabs();
+  setupArqueo();
   setupDashboard();
   setupClientEdit();
+
+  // Filtro "clientes que compraron" (por fechas / último mes)
+  const cb = id => document.getElementById(id);
+  ["cliBuyFrom", "cliBuyTo"].forEach(id => cb(id).addEventListener("change", renderClientsTable));
+  cb("cliBuyMonth").addEventListener("click", () => {
+    cb("cliBuyFrom").value = ymd(Date.now() - 30 * 86400000); cb("cliBuyTo").value = ymd(Date.now()); renderClientsTable();
+  });
+  cb("cliBuyClear").addEventListener("click", () => { cb("cliBuyFrom").value = ""; cb("cliBuyTo").value = ""; renderClientsTable(); });
 
   document.getElementById("closeModalBtn").addEventListener("click", closeModal);
   document.getElementById("orderModal").addEventListener("click", e => {
