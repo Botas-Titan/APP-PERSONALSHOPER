@@ -147,9 +147,11 @@ function prioridadAbono(o) {
   // o comprado y todavía sin recibir (compra online / directa marcada como comprada).
   if (o.status === "enviado") return 2;
   if ((o.status === "por_comprar_online" || o.status === "compra_directa") && o.compradoOnline) return 2;
-  return 3;                                                                   // por comprar (y por empacar/enviar)
+  // Ya comprados pero aún en EE.UU. sin enviar: se abonan antes que los no comprados (el más antiguo primero)
+  if (o.status === "por_empacar" || o.status === "por_enviar") return 3;
+  return 4;                                                                   // por comprar
 }
-const PRIORIDAD_LABEL = { 1: "En Cúcuta", 2: "Viajando", 3: "Por comprar" };
+const PRIORIDAD_LABEL = { 1: "En Cúcuta", 2: "Viajando", 3: "Por empacar", 4: "Por comprar" };
 
 /* Fecha en que se COMPRÓ un producto (para "Compras por fecha").
    Nuevos: o.fechaCompra. Antiguos: se deduce del historial. */
@@ -2325,7 +2327,7 @@ function openClientAccount(numero) {
     ${rows}
 
     <div class="detail-section-title">Registrar abono general</div>
-    <div class="file-note" style="margin-bottom:6px">Se aplica en este orden: <b>1° pedidos en Cúcuta</b>, <b>2° pedidos viajando</b>, <b>3° pedidos por comprar</b> (el más antiguo primero en cada grupo). Lo que sobre queda como saldo a favor.</div>
+    <div class="file-note" style="margin-bottom:6px">Se aplica en este orden: <b>1° pedidos en Cúcuta</b>, <b>2° pedidos viajando</b>, <b>3° pedidos por empacar</b>, <b>4° pedidos por comprar</b> (el más antiguo primero en cada grupo). Lo que sobre queda como saldo a favor.</div>
     <div class="guia-input-row">
       <input type="text" inputmode="numeric" id="abonoGeneralInput" placeholder="Monto del abono (COP)" />
       <button class="btn-primary" id="aplicarAbonoGeneral">Aplicar</button>
