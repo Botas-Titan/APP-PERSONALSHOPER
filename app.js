@@ -2729,17 +2729,10 @@ function renderComprasPorFecha() {
 }
 
 /* ============================================================
-   ARQUEO CONTABLE (solo admin): costo · venta · ganancia por producto
+   ARQUEO CONTABLE (solo admin): costo en USD · venta en COP por producto
+   (No se convierte: el costo se muestra en dólares tal como se registra.)
    ============================================================ */
-function getTrm() { try { return Number(localStorage.getItem("armadiusa_trm")) || 0; } catch { return 0; } }
 function setupArqueo() {
-  const trm = document.getElementById("arqTrm");
-  const t = getTrm(); if (t) trm.value = fmtThousands(String(t));
-  trm.addEventListener("input", () => {
-    trm.value = fmtThousands(trm.value);
-    try { localStorage.setItem("armadiusa_trm", String(parseNum(trm.value))); } catch {}
-    renderArqueo();
-  });
   ["arqFrom", "arqTo"].forEach(id => document.getElementById(id).addEventListener("change", renderArqueo));
   document.getElementById("arqSearch").addEventListener("input", renderArqueo);
   document.getElementById("arqClear").addEventListener("click", () => {
@@ -2750,7 +2743,6 @@ function setupArqueo() {
 function renderArqueo() {
   const wrap = document.getElementById("arqWrap");
   if (!wrap || CURRENT.role !== "admin") return;
-  const trm = parseNum(document.getElementById("arqTrm").value) || getTrm();
   const from = document.getElementById("arqFrom").value, to = document.getElementById("arqTo").value;
   const q = document.getElementById("arqSearch").value.toLowerCase().trim();
   const f = from ? new Date(from + "T00:00:00").getTime() : null, t = to ? new Date(to + "T23:59:59").getTime() : null;
@@ -2765,32 +2757,23 @@ function renderArqueo() {
 
   const conCosto = lista.filter(o => Number(o.costoUsd) > 0);
   const sinCosto = lista.length - conCosto.length;
-  const costoCop = o => (Number(o.costoUsd) || 0) * trm;
-  const totCosto = conCosto.reduce((a, o) => a + costoCop(o), 0);
+  const totCostoUsd = conCosto.reduce((a, o) => a + Number(o.costoUsd), 0);
   const totVenta = conCosto.reduce((a, o) => a + (o.valor || 0), 0);
-  const totGan = totVenta - totCosto;
-  const margen = totVenta ? (totGan / totVenta * 100) : 0;
 
-  document.getElementById("arqStats").innerHTML = trm ? `
-    <div class="stat money"><div class="num">${COP(Math.round(totCosto))}</div><div class="lbl">Costo total (${conCosto.length} productos)</div></div>
-    <div class="stat money"><div class="num">${COP(totVenta)}</div><div class="lbl">Vendido</div></div>
-    <div class="stat money"><div class="num" style="color:${totGan < 0 ? "var(--con-fg,#b42318)" : "inherit"}">${COP(Math.round(totGan))}</div><div class="lbl">Ganancia · margen ${margen.toFixed(1)}%</div></div>
-    <div class="stat"><div class="num">${sinCosto}</div><div class="lbl">Sin costo registrado</div></div>`
-    : `<div class="empty-box" style="grid-column:1/-1">Escribe el valor del dólar (COP) arriba para calcular costos y ganancias.</div>`;
+  document.getElementById("arqStats").innerHTML = `
+    <div class="stat money"><div class="num">${USD(Math.round(totCostoUsd * 100) / 100)}</div><div class="lbl">Costo total (${conCosto.length} productos)</div></div>
+    <div class="stat money"><div class="num">${COP(totVenta)}</div><div class="lbl">Vendido (productos con costo)</div></div>
+    <div class="stat"><div class="num">${sinCosto}</div><div class="lbl">Sin costo registrado</div></div>`;
 
   if (!lista.length) { wrap.innerHTML = `<div class="empty-box">Sin pedidos en ese filtro.</div>`; return; }
   wrap.innerHTML = `<table>
-    <thead><tr><th>Fecha</th><th>Cliente</th><th>Producto</th><th>Costo USD</th><th>Costo COP</th><th>Venta</th><th>Ganancia</th><th>%</th></tr></thead>
+    <thead><tr><th>Fecha</th><th>Cliente</th><th>Producto</th><th>Costo (USD)</th><th>Venta (COP)</th></tr></thead>
     <tbody>${lista.map(o => {
       const c = o.cliente || {}, tieneCosto = Number(o.costoUsd) > 0;
-      const cc = costoCop(o), gan = (o.valor || 0) - cc;
       return `<tr class="hist-row" data-id="${o.id}">
         <td>${fmtDateDMY(o.createdAt)}</td><td>#${c.numero ?? "—"} ${escapeHtml(c.nombre || "")}</td><td>${escapeHtml(o.productName)}</td>
         <td>${tieneCosto ? USD(o.costoUsd) : "<span class='file-note'>sin costo</span>"}</td>
-        <td>${tieneCosto && trm ? COP(Math.round(cc)) : "—"}</td>
         <td>${COP(o.valor)}</td>
-        <td style="font-weight:700;color:${gan < 0 ? "var(--con-fg,#b42318)" : "inherit"}">${tieneCosto && trm ? COP(Math.round(gan)) : "—"}</td>
-        <td>${tieneCosto && trm && o.valor ? (gan / o.valor * 100).toFixed(0) + "%" : "—"}</td>
       </tr>`; }).join("")}</tbody></table>`;
   wrap.querySelectorAll(".hist-row").forEach(r => r.addEventListener("click", () => openOrderModal(r.dataset.id)));
 }

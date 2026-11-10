@@ -226,11 +226,10 @@
         <div class="toolbar">
           <label class="inline-lbl">Desde <input type="date" id="arqFrom" /></label>
           <label class="inline-lbl">Hasta <input type="date" id="arqTo" /></label>
-          <label class="inline-lbl">Dólar (COP) <input type="text" inputmode="numeric" id="arqTrm" placeholder="4.000" style="width:90px" /></label>
           <input type="search" id="arqSearch" placeholder="Buscar producto o cliente…" />
           <button id="arqClear" class="btn-ghost" type="button">Limpiar</button>
         </div>
-        <p class="section-note">Costo = lo registrado en USD al comprar × el dólar que escribas aquí. Venta = valor del producto. Ganancia = venta − costo.</p>
+        <p class="section-note">Costo = el precio en <strong>dólares</strong> que registras al comprar el producto. Venta = valor del producto en pesos (COP).</p>
         <div id="arqStats" class="stats-row"></div>
         <div id="arqWrap" class="table-wrap"></div>
       </section>
