@@ -143,8 +143,11 @@ function medioSegHTML(name) {
    (Dentro de cada grupo, el más antiguo primero.) */
 function prioridadAbono(o) {
   if (o.status === "recibido_col" || o.status === "enviado_col") return 1;   // en Cúcuta
-  if (o.status === "enviado" || o.status === "por_enviar") return 2;          // viajando
-  return 3;                                                                   // por comprar / por empacar
+  // Viajando = ya comprado y enviado, aún sin entregar: en camino a Colombia ("Enviado a Col"),
+  // o comprado y todavía sin recibir (compra online / directa marcada como comprada).
+  if (o.status === "enviado") return 2;
+  if ((o.status === "por_comprar_online" || o.status === "compra_directa") && o.compradoOnline) return 2;
+  return 3;                                                                   // por comprar (y por empacar/enviar)
 }
 const PRIORIDAD_LABEL = { 1: "En Cúcuta", 2: "Viajando", 3: "Por comprar" };
 
