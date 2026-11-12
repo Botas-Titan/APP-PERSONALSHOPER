@@ -774,3 +774,9 @@ label select:focus { outline: 2px solid var(--accent); border-color: transparent
 .cli-buy-bar { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 10px 14px; }
 .cli-buy-title { font-size: 13px; font-weight: 700; margin-right: 4px; }
 @media (max-width: 640px) { .cli-buy-bar .inline-lbl { flex: 1 1 140px; } }
+
+/* Arqueo diario */
+.arq-total td { font-weight: 800; background: var(--bg-soft); border-top: 2px solid var(--line-strong); }
+.arq-dia { cursor: pointer; }
+.arq-dia:hover td { background: var(--bg-soft); }
+.arq-dia.sel td { font-weight: 800; background: var(--panel); }

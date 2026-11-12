@@ -224,16 +224,14 @@
       <!-- ---------- VISTA ARQUEO CONTABLE (solo admin) ---------- -->
       <section id="view-arqueo" class="view hidden">
         <div class="toolbar">
-          <label class="inline-lbl">Desde <input type="date" id="arqFrom" /></label>
-          <label class="inline-lbl">Hasta <input type="date" id="arqTo" /></label>
-          <input type="search" id="arqSearch" placeholder="Buscar producto o cliente…" />
-          <button id="arqClear" class="btn-ghost" type="button">Limpiar</button>
+          <label class="inline-lbl">Día <input type="date" id="arqDay" /></label>
+          <button id="arqHoy" class="btn-secondary" type="button">Hoy</button>
+          <button id="arqAyer" class="btn-secondary" type="button">Ayer</button>
         </div>
-        <p class="section-note">Costo = el precio en <strong>dólares</strong> que registras al comprar el producto. Venta = valor del producto en pesos (COP).</p>
+        <p class="section-note">Cierre del día: el <strong>dinero que debe haber</strong> (abonos recibidos ese día, en efectivo y por transferencia) y los <strong>productos entregados</strong> ese día. Cada día queda guardado para consultarlo después.</p>
         <div id="arqStats" class="stats-row"></div>
-        <div id="arqWrap" class="table-wrap"></div>
+        <div id="arqDayWrap"></div>
       </section>
-
       <!-- ---------- VISTA DASHBOARD ---------- -->
       <section id="view-dashboard" class="view hidden">
         <div class="toolbar">

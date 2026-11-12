@@ -2729,53 +2729,107 @@ function renderComprasPorFecha() {
 }
 
 /* ============================================================
-   ARQUEO CONTABLE (solo admin): costo en USD · venta en COP por producto
-   (No se convierte: el costo se muestra en dólares tal como se registra.)
+   ARQUEO DIARIO (solo admin)
+   Por cada día: productos ENTREGADOS ese día + dinero que debe haber
+   (abonos recibidos ese día, separados en efectivo / transferencia).
+   No guarda nada aparte: se arma con las fechas de entrega y de cada abono,
+   así cada día queda consultable mientras existan los pedidos.
    ============================================================ */
-function setupArqueo() {
-  ["arqFrom", "arqTo"].forEach(id => document.getElementById(id).addEventListener("change", renderArqueo));
-  document.getElementById("arqSearch").addEventListener("input", renderArqueo);
-  document.getElementById("arqClear").addEventListener("click", () => {
-    ["arqFrom", "arqTo", "arqSearch"].forEach(id => document.getElementById(id).value = "");
-    renderArqueo();
-  });
+let arqDay = null;
+const diaCorto = s => s.split("-").reverse().join("/");
+
+// Dinero recibido en un día: abonos con fecha de ese día (el saldo a favor aplicado NO cuenta como dinero nuevo)
+function abonosDelDia(day) {
+  const out = [];
+  ORDERS.forEach(o => getAbonos(o).forEach(a => {
+    if (a.tipo === "credito") return;
+    if (a.fecha && ymd(a.fecha) === day) out.push({ o, a });
+  }));
+  return out;
 }
+const entregadosDelDia = day => ORDERS.filter(o => o.status === "entregado" && o.historial && o.historial.entregado && ymd(o.historial.entregado) === day);
+function totalesMedio(lista) {
+  const t = { efectivo: 0, transferencia: 0, sin: 0 };
+  lista.forEach(({ a }) => { const m = a.medio === "efectivo" || a.medio === "transferencia" ? a.medio : "sin"; t[m] += Number(a.monto) || 0; });
+  return t;
+}
+
+function setupArqueo() {
+  const f = document.getElementById("arqDay");
+  f.addEventListener("change", () => { arqDay = f.value || ymd(Date.now()); renderArqueo(); });
+  document.getElementById("arqHoy").addEventListener("click", () => { arqDay = ymd(Date.now()); renderArqueo(); });
+  document.getElementById("arqAyer").addEventListener("click", () => { arqDay = ymd(Date.now() - 86400000); renderArqueo(); });
+}
+
 function renderArqueo() {
-  const wrap = document.getElementById("arqWrap");
+  const wrap = document.getElementById("arqDayWrap");
   if (!wrap || CURRENT.role !== "admin") return;
-  const from = document.getElementById("arqFrom").value, to = document.getElementById("arqTo").value;
-  const q = document.getElementById("arqSearch").value.toLowerCase().trim();
-  const f = from ? new Date(from + "T00:00:00").getTime() : null, t = to ? new Date(to + "T23:59:59").getTime() : null;
+  if (!arqDay) arqDay = ymd(Date.now());
+  document.getElementById("arqDay").value = arqDay;
 
-  const lista = ORDERS.filter(o => {
-    const ts = tsMillis(o.createdAt);
-    if (f != null && ts < f) return false;
-    if (t != null && ts > t) return false;
-    if (q && ![o.productName, (o.cliente || {}).nombre, "#" + (o.cliente || {}).numero].filter(Boolean).join(" ").toLowerCase().includes(q)) return false;
-    return true;
-  }).sort((a, b) => tsMillis(b.createdAt) - tsMillis(a.createdAt));
-
-  const conCosto = lista.filter(o => Number(o.costoUsd) > 0);
-  const sinCosto = lista.length - conCosto.length;
-  const totCostoUsd = conCosto.reduce((a, o) => a + Number(o.costoUsd), 0);
-  const totVenta = conCosto.reduce((a, o) => a + (o.valor || 0), 0);
+  const abonos = abonosDelDia(arqDay).sort((x, y) => tsMillis(x.a.fecha) - tsMillis(y.a.fecha));
+  const tot = totalesMedio(abonos);
+  const entregados = entregadosDelDia(arqDay);
+  const totalDinero = tot.efectivo + tot.transferencia + tot.sin;
+  const usd = entregados.reduce((s, o) => s + (Number(o.costoUsd) || 0), 0);
+  const valorEnt = entregados.reduce((s, o) => s + (o.valor || 0), 0);
 
   document.getElementById("arqStats").innerHTML = `
-    <div class="stat money"><div class="num">${USD(Math.round(totCostoUsd * 100) / 100)}</div><div class="lbl">Costo total (${conCosto.length} productos)</div></div>
-    <div class="stat money"><div class="num">${COP(totVenta)}</div><div class="lbl">Vendido (productos con costo)</div></div>
-    <div class="stat"><div class="num">${sinCosto}</div><div class="lbl">Sin costo registrado</div></div>`;
+    <div class="stat money"><div class="num">${COP(tot.efectivo)}</div><div class="lbl">💵 Debe haber en efectivo</div></div>
+    <div class="stat money"><div class="num">${COP(tot.transferencia)}</div><div class="lbl">🏦 Debe haber por transferencia</div></div>
+    <div class="stat money"><div class="num">${COP(totalDinero)}</div><div class="lbl">Total recibido${tot.sin ? " (incluye " + COP(tot.sin) + " sin medio)" : ""}</div></div>
+    <div class="stat"><div class="num">${entregados.length}</div><div class="lbl">Productos entregados · ${COP(valorEnt)}</div></div>`;
 
-  if (!lista.length) { wrap.innerHTML = `<div class="empty-box">Sin pedidos en ese filtro.</div>`; return; }
-  wrap.innerHTML = `<table>
-    <thead><tr><th>Fecha</th><th>Cliente</th><th>Producto</th><th>Costo (USD)</th><th>Venta (COP)</th></tr></thead>
-    <tbody>${lista.map(o => {
-      const c = o.cliente || {}, tieneCosto = Number(o.costoUsd) > 0;
-      return `<tr class="hist-row" data-id="${o.id}">
-        <td>${fmtDateDMY(o.createdAt)}</td><td>#${c.numero ?? "—"} ${escapeHtml(c.nombre || "")}</td><td>${escapeHtml(o.productName)}</td>
-        <td>${tieneCosto ? USD(o.costoUsd) : "<span class='file-note'>sin costo</span>"}</td>
-        <td>${COP(o.valor)}</td>
-      </tr>`; }).join("")}</tbody></table>`;
+  const entHTML = entregados.length ? `
+    <table>
+      <thead><tr><th>Cliente</th><th>Producto</th><th>Valor</th><th>Abonado</th><th>Saldo</th><th>Costo (USD)</th></tr></thead>
+      <tbody>${entregados.map(o => { const c = o.cliente || {}, s = saldoDe(o); return `
+        <tr class="hist-row" data-id="${o.id}">
+          <td>#${c.numero ?? "—"} ${escapeHtml(c.nombre || "")}</td><td>${escapeHtml(o.productName)}</td>
+          <td>${COP(o.valor)}</td><td>${COP(abonoTotal(o))}</td>
+          <td>${s > 0 ? COP(s) : "Pagado ✓"}</td>
+          <td>${Number(o.costoUsd) > 0 ? USD(o.costoUsd) : "—"}</td></tr>`; }).join("")}
+        <tr class="arq-total"><td colspan="2">Total entregado</td><td>${COP(valorEnt)}</td><td></td><td></td><td>${usd ? USD(Math.round(usd * 100) / 100) : "—"}</td></tr>
+      </tbody></table>` : `<div class="empty-box">Ningún producto se entregó el ${diaCorto(arqDay)}.</div>`;
+
+  const abHTML = abonos.length ? `
+    <table>
+      <thead><tr><th>Hora</th><th>Cliente</th><th>Producto</th><th>Medio</th><th>Monto</th></tr></thead>
+      <tbody>${abonos.map(({ o, a }) => { const c = o.cliente || {}; return `
+        <tr class="hist-row" data-id="${o.id}">
+          <td>${new Date(tsMillis(a.fecha)).toLocaleTimeString("es-CO", { hour: "2-digit", minute: "2-digit" })}</td>
+          <td>#${c.numero ?? "—"} ${escapeHtml(c.nombre || "")}</td><td>${escapeHtml(o.productName)}</td>
+          <td>${medioLabel(a.medio)}</td><td>${COP(a.monto)}</td></tr>`; }).join("")}
+      </tbody></table>` : `<div class="empty-box">No se registraron abonos el ${diaCorto(arqDay)}.</div>`;
+
+  // Registro de los últimos 30 días con movimiento
+  const dias = {};
+  const limite = ymd(Date.now() - 29 * 86400000);
+  ORDERS.forEach(o => {
+    if (o.status === "entregado" && o.historial && o.historial.entregado) { const d = ymd(o.historial.entregado); if (d >= limite) (dias[d] = dias[d] || { ent: 0, ef: 0, tr: 0, sin: 0 }).ent++; }
+    getAbonos(o).forEach(a => {
+      if (a.tipo === "credito" || !a.fecha) return;
+      const d = ymd(a.fecha); if (d < limite) return;
+      const x = dias[d] = dias[d] || { ent: 0, ef: 0, tr: 0, sin: 0 };
+      if (a.medio === "efectivo") x.ef += Number(a.monto) || 0; else if (a.medio === "transferencia") x.tr += Number(a.monto) || 0; else x.sin += Number(a.monto) || 0;
+    });
+  });
+  const regHTML = Object.keys(dias).sort().reverse().map(d => { const x = dias[d]; return `
+    <tr class="arq-dia ${d === arqDay ? "sel" : ""}" data-day="${d}">
+      <td>${diaCorto(d)}</td><td>${x.ent}</td><td>${COP(x.ef)}</td><td>${COP(x.tr)}</td><td>${COP(x.ef + x.tr + x.sin)}</td></tr>`; }).join("");
+
+  wrap.innerHTML = `
+    <div class="detail-section-title">Dinero recibido el ${diaCorto(arqDay)}</div>
+    <div class="table-wrap">${abHTML}</div>
+    <div class="detail-section-title" style="margin-top:22px">Productos entregados el ${diaCorto(arqDay)}</div>
+    <div class="table-wrap">${entHTML}</div>
+    <div class="detail-section-title" style="margin-top:22px">Registro de arqueos (últimos 30 días)</div>
+    ${regHTML ? `<div class="table-wrap"><table>
+      <thead><tr><th>Día</th><th>Entregados</th><th>Efectivo</th><th>Transferencia</th><th>Total</th></tr></thead>
+      <tbody>${regHTML}</tbody></table></div><p class="section-note">Toca un día para ver su detalle.</p>` : `<div class="empty-box">Aún no hay movimientos.</div>`}`;
+
   wrap.querySelectorAll(".hist-row").forEach(r => r.addEventListener("click", () => openOrderModal(r.dataset.id)));
+  wrap.querySelectorAll(".arq-dia").forEach(r => r.addEventListener("click", () => { arqDay = r.dataset.day; renderArqueo(); window.scrollTo(0, 0); }));
 }
 
 /* ============================================================
