@@ -514,7 +514,7 @@ function setupNav() {
 }
 function showView(view) {
   // Bloquea solo Dashboard y Usuarios para la colaboradora (lo demás sí lo puede usar)
-  if (CURRENT.role !== "admin" && (view === "dashboard" || view === "usuarios" || view === "arqueo")) view = "tablero";
+  if (CURRENT.role !== "admin" && (view === "dashboard" || view === "usuarios")) view = "tablero";
   currentView = view;
   document.querySelectorAll(".tab").forEach(t =>
     t.classList.toggle("active", t.dataset.view === view));
@@ -1323,6 +1323,7 @@ function openOrderModal(id) {
       advanceUI = `
         <div style="width:100%">
           <span class="badge done" style="display:inline-block;margin-bottom:6px">✅ Comprado</span>
+          <button class="btn-ghost" id="desmarcarBtn" type="button" style="margin-left:8px">↩ Desmarcar comprado</button>
           ${costInput}
           <button class="btn-primary" id="advanceBtn">📦 Confirmar recibido físico → ${destino}</button>
         </div>`;
@@ -1427,6 +1428,8 @@ function openOrderModal(id) {
   if (advBtn) advBtn.addEventListener("click", () => advanceStatus(o));
   const compradoBtn = document.getElementById("compradoBtn");
   if (compradoBtn) compradoBtn.addEventListener("click", () => marcarComprado(o.id));
+  const desmarcarBtn = document.getElementById("desmarcarBtn");
+  if (desmarcarBtn) desmarcarBtn.addEventListener("click", () => desmarcarComprado(o.id));
   const backBtn = document.getElementById("backBtn");
   if (backBtn) backBtn.addEventListener("click", () => regresarStatus(o));
   const printBtn = document.getElementById("printBtn");
@@ -1656,6 +1659,23 @@ async function marcarComprado(id) {
       updatedAt: firebase.firestore.FieldValue.serverTimestamp() });
     setTimeout(() => openOrderModal(id), 250);
   } catch (e) { alert("No se pudo marcar como comprado: " + e.message); }
+}
+
+// Deshacer "comprado" (la tienda canceló / no había existencias): vuelve a "por comprar"
+async function desmarcarComprado(id) {
+  if (!confirm("¿Desmarcar este producto como comprado? Volverá a quedar como pendiente por comprar.")) return;
+  if (!FIREBASE_READY) {
+    const i = ORDERS.findIndex(x => x.id === id);
+    if (i >= 0) { ORDERS[i].compradoOnline = false; delete ORDERS[i].fechaCompra; ORDERS[i].updatedAt = Date.now(); }
+    saveLocal(); renderAllLocal(); openOrderModal(id);
+    return;
+  }
+  try {
+    await db.collection("ordenes").doc(id).update({
+      compradoOnline: false, fechaCompra: firebase.firestore.FieldValue.delete(),
+      updatedAt: firebase.firestore.FieldValue.serverTimestamp() });
+    setTimeout(() => openOrderModal(id), 250);
+  } catch (e) { alert("No se pudo desmarcar: " + e.message); }
 }
 
 // Regresar el pedido al proceso anterior (solo admin)
@@ -2453,7 +2473,7 @@ async function removeUser(username) {
 
 function renderUsuarios() {
   const wrap = document.getElementById("usuariosWrap");
-  if (!wrap || CURRENT.role !== "admin") return;
+  if (!wrap) return;
   const rows = Object.keys(USERS).sort().map(u => {
     const d = USERS[u];
     return `<tr>
@@ -2754,18 +2774,57 @@ function totalesMedio(lista) {
   return t;
 }
 
+/* ---------- Gastos de caja del día (los digita quien cuadra la caja) ----------
+   Se guardan en un documento por día: clientes/_gastos_AAAA-MM-DD  { items:[{id,concepto,monto,por,ts}] }
+   (mismo patrón que las fotos "_foto_": no aparece en la lista de clientes). */
+const GASTOS = {};
+let gastosUnsub = null, gastosDia = null;
+function watchGastos(day) {
+  if (gastosDia === day) return;
+  gastosDia = day;
+  if (gastosUnsub) { gastosUnsub(); gastosUnsub = null; }
+  if (!FIREBASE_READY) { GASTOS[day] = (lsGet("armadiusa_gastos", {})[day]) || []; return; }
+  gastosUnsub = db.collection("clientes").doc("_gastos_" + day).onSnapshot(d => {
+    GASTOS[day] = d.exists ? (d.data().items || []) : [];
+    if (currentView === "arqueo" && arqDay === day) renderArqueo();
+  }, () => {});
+}
+async function saveGastos(day, items) {
+  GASTOS[day] = items;
+  if (!FIREBASE_READY) { const all = lsGet("armadiusa_gastos", {}); all[day] = items; lsSet("armadiusa_gastos", all); renderArqueo(); return; }
+  try { await db.collection("clientes").doc("_gastos_" + day).set({ items }); }
+  catch (e) { alert("No se pudo guardar el gasto: " + e.message); }
+}
+function addGasto() {
+  const c = document.getElementById("gastoConcepto").value.trim();
+  const m = parseNum(document.getElementById("gastoMonto").value);
+  if (!c || !(m > 0)) { alert("Escribe el concepto y el valor del gasto."); return; }
+  saveGastos(arqDay, [...(GASTOS[arqDay] || []), { id: "g" + Date.now(), concepto: c, monto: m, por: CURRENT.user || CURRENT.role, ts: Date.now() }]);
+}
+function delGasto(id) {
+  if (!confirm("¿Eliminar este gasto?")) return;
+  saveGastos(arqDay, (GASTOS[arqDay] || []).filter(g => g.id !== id));
+}
+
 function setupArqueo() {
   const f = document.getElementById("arqDay");
   f.addEventListener("change", () => { arqDay = f.value || ymd(Date.now()); renderArqueo(); });
   document.getElementById("arqHoy").addEventListener("click", () => { arqDay = ymd(Date.now()); renderArqueo(); });
   document.getElementById("arqAyer").addEventListener("click", () => { arqDay = ymd(Date.now() - 86400000); renderArqueo(); });
+  document.getElementById("arqPrint").addEventListener("click", () => window.print());
 }
 
 function renderArqueo() {
   const wrap = document.getElementById("arqDayWrap");
-  if (!wrap || CURRENT.role !== "admin") return;
+  if (!wrap) return;
   if (!arqDay) arqDay = ymd(Date.now());
   document.getElementById("arqDay").value = arqDay;
+  watchGastos(arqDay);
+  const esAdmin = CURRENT.role === "admin";
+  const gastos = GASTOS[arqDay] || [];
+  const totGastos = gastos.reduce((s, g) => s + (Number(g.monto) || 0), 0);
+  const hdr = document.getElementById("arqPrintHdr");
+  if (hdr) hdr.innerHTML = `<h2>ARMADIUSA · Arqueo de caja</h2><p>Fecha: <strong>${diaCorto(arqDay)}</strong> · Responsable: ${escapeHtml((USERS[CURRENT.user] && USERS[CURRENT.user].nombre) || CURRENT.user || "")}</p>`;
 
   const abonos = abonosDelDia(arqDay).sort((x, y) => tsMillis(x.a.fecha) - tsMillis(y.a.fecha));
   const tot = totalesMedio(abonos);
@@ -2778,18 +2837,20 @@ function renderArqueo() {
     <div class="stat money"><div class="num">${COP(tot.efectivo)}</div><div class="lbl">💵 Debe haber en efectivo</div></div>
     <div class="stat money"><div class="num">${COP(tot.transferencia)}</div><div class="lbl">🏦 Debe haber por transferencia</div></div>
     <div class="stat money"><div class="num">${COP(totalDinero)}</div><div class="lbl">Total recibido${tot.sin ? " (incluye " + COP(tot.sin) + " sin medio)" : ""}</div></div>
+    <div class="stat money"><div class="num">${COP(totGastos)}</div><div class="lbl">🧾 Gastos del día</div></div>
+    <div class="stat money"><div class="num">${COP(tot.efectivo - totGastos)}</div><div class="lbl">💰 Efectivo que debe quedar en caja</div></div>
     <div class="stat"><div class="num">${entregados.length}</div><div class="lbl">Productos entregados · ${COP(valorEnt)}</div></div>`;
 
   const entHTML = entregados.length ? `
     <table>
-      <thead><tr><th>Cliente</th><th>Producto</th><th>Valor</th><th>Abonado</th><th>Saldo</th><th>Costo (USD)</th></tr></thead>
+      <thead><tr><th>Cliente</th><th>Producto</th><th>Valor</th><th>Abonado</th><th>Saldo</th>${esAdmin ? "<th>Costo (USD)</th>" : ""}</tr></thead>
       <tbody>${entregados.map(o => { const c = o.cliente || {}, s = saldoDe(o); return `
         <tr class="hist-row" data-id="${o.id}">
           <td>#${c.numero ?? "—"} ${escapeHtml(c.nombre || "")}</td><td>${escapeHtml(o.productName)}</td>
           <td>${COP(o.valor)}</td><td>${COP(abonoTotal(o))}</td>
           <td>${s > 0 ? COP(s) : "Pagado ✓"}</td>
-          <td>${Number(o.costoUsd) > 0 ? USD(o.costoUsd) : "—"}</td></tr>`; }).join("")}
-        <tr class="arq-total"><td colspan="2">Total entregado</td><td>${COP(valorEnt)}</td><td></td><td></td><td>${usd ? USD(Math.round(usd * 100) / 100) : "—"}</td></tr>
+          ${esAdmin ? `<td>${Number(o.costoUsd) > 0 ? USD(o.costoUsd) : "—"}</td>` : ""}</tr>`; }).join("")}
+        <tr class="arq-total"><td colspan="2">Total entregado</td><td>${COP(valorEnt)}</td><td></td><td></td>${esAdmin ? `<td>${usd ? USD(Math.round(usd * 100) / 100) : "—"}</td>` : ""}</tr>
       </tbody></table>` : `<div class="empty-box">Ningún producto se entregó el ${diaCorto(arqDay)}.</div>`;
 
   const abHTML = abonos.length ? `
@@ -2823,13 +2884,34 @@ function renderArqueo() {
     <div class="table-wrap">${abHTML}</div>
     <div class="detail-section-title" style="margin-top:22px">Productos entregados el ${diaCorto(arqDay)}</div>
     <div class="table-wrap">${entHTML}</div>
-    <div class="detail-section-title" style="margin-top:22px">Registro de arqueos (últimos 30 días)</div>
+    <div class="detail-section-title" style="margin-top:22px">Gastos del día (salen del efectivo)</div>
+    <div class="table-wrap">${gastos.length ? `<table>
+      <thead><tr><th>Concepto</th><th>Valor</th><th class="no-print"></th></tr></thead>
+      <tbody>${gastos.map(g => `<tr><td>${escapeHtml(g.concepto)}</td><td>${COP(g.monto)}</td><td class="no-print"><button class="mini-btn del" data-delgasto="${g.id}">Quitar</button></td></tr>`).join("")}
+        <tr class="arq-total"><td>Total gastos</td><td>${COP(totGastos)}</td><td class="no-print"></td></tr></tbody></table>` : `<div class="empty-box">Sin gastos registrados este día.</div>`}</div>
+    <div class="guia-input-row no-print" style="margin-top:10px">
+      <input type="text" id="gastoConcepto" placeholder="Concepto (domicilio, papelería, bolsas…)" />
+      <input type="text" inputmode="numeric" id="gastoMonto" placeholder="Valor (COP)" style="max-width:160px" />
+      <button class="btn-primary" id="gastoAddBtn" type="button">Agregar gasto</button>
+    </div>
+    <div class="arq-cuadre">
+      <div><span>Efectivo recibido</span><strong>${COP(tot.efectivo)}</strong></div>
+      <div><span>− Gastos</span><strong>${COP(totGastos)}</strong></div>
+      <div class="tot"><span>= Efectivo que debe quedar en caja</span><strong>${COP(tot.efectivo - totGastos)}</strong></div>
+      <div><span>Transferencias recibidas</span><strong>${COP(tot.transferencia)}</strong></div>
+      <div class="print-only firma"><span>Efectivo contado: ____________________</span><span>Firma: ____________________</span></div>
+    </div>
+    ${esAdmin ? `<div class="detail-section-title no-print" style="margin-top:22px">Registro de arqueos (últimos 30 días)</div>
     ${regHTML ? `<div class="table-wrap"><table>
       <thead><tr><th>Día</th><th>Entregados</th><th>Efectivo</th><th>Transferencia</th><th>Total</th></tr></thead>
-      <tbody>${regHTML}</tbody></table></div><p class="section-note">Toca un día para ver su detalle.</p>` : `<div class="empty-box">Aún no hay movimientos.</div>`}`;
+      <tbody>${regHTML}</tbody></table></div><p class="section-note">Toca un día para ver su detalle.</p>` : `<div class="empty-box">Aún no hay movimientos.</div>`}` : ""}`;
 
   wrap.querySelectorAll(".hist-row").forEach(r => r.addEventListener("click", () => openOrderModal(r.dataset.id)));
   wrap.querySelectorAll(".arq-dia").forEach(r => r.addEventListener("click", () => { arqDay = r.dataset.day; renderArqueo(); window.scrollTo(0, 0); }));
+  const gm = document.getElementById("gastoMonto");
+  gm.addEventListener("input", e => { e.target.value = fmtThousands(e.target.value); });
+  document.getElementById("gastoAddBtn").addEventListener("click", addGasto);
+  wrap.querySelectorAll("[data-delgasto]").forEach(b => b.addEventListener("click", () => delGasto(b.dataset.delgasto)));
 }
 
 /* ============================================================

@@ -44,7 +44,7 @@
         <button class="tab" data-view="nueva">＋ Nueva orden</button>
         <button class="tab" data-view="clientes">Clientes</button>
         <button class="tab" data-view="historial">Historial</button>
-        <button class="tab" data-view="arqueo" data-role="admin">Arqueo</button>
+        <button class="tab" data-view="arqueo">Arqueo</button>
         <button class="tab" data-view="dashboard" data-role="admin">Dashboard</button>
         <button class="tab" data-view="usuarios" data-role="admin">Usuarios</button>
       </nav>
@@ -227,8 +227,10 @@
           <label class="inline-lbl">Día <input type="date" id="arqDay" /></label>
           <button id="arqHoy" class="btn-secondary" type="button">Hoy</button>
           <button id="arqAyer" class="btn-secondary" type="button">Ayer</button>
+          <button id="arqPrint" class="btn-secondary" type="button">🖨 Imprimir / PDF</button>
         </div>
-        <p class="section-note">Cierre del día: el <strong>dinero que debe haber</strong> (abonos recibidos ese día, en efectivo y por transferencia) y los <strong>productos entregados</strong> ese día. Cada día queda guardado para consultarlo después.</p>
+        <p class="section-note no-print">Cierre del día: el <strong>dinero que debe haber</strong> (abonos recibidos ese día, en efectivo y por transferencia) y los <strong>productos entregados</strong> ese día. Cada día queda guardado para consultarlo después.</p>
+        <div id="arqPrintHdr" class="print-only"></div>
         <div id="arqStats" class="stats-row"></div>
         <div id="arqDayWrap"></div>
       </section>

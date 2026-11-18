@@ -780,3 +780,19 @@ label select:focus { outline: 2px solid var(--accent); border-color: transparent
 .arq-dia { cursor: pointer; }
 .arq-dia:hover td { background: var(--bg-soft); }
 .arq-dia.sel td { font-weight: 800; background: var(--panel); }
+
+/* Arqueo: cuadre de caja e impresión */
+.print-only { display: none; }
+.arq-cuadre { margin-top: 14px; border: 1px solid var(--line-strong); border-radius: 12px; padding: 12px 14px; max-width: 460px; }
+.arq-cuadre > div { display: flex; justify-content: space-between; gap: 12px; padding: 4px 0; }
+.arq-cuadre .tot { border-top: 2px solid var(--line-strong); margin-top: 4px; padding-top: 8px; font-size: 16px; }
+@media print {
+  body { background: #fff !important; }
+  .topbar, .tabs, .toolbar, .no-print, #toast, button { display: none !important; }
+  .view:not(#view-arqueo) { display: none !important; }
+  #view-arqueo { display: block !important; }
+  .print-only { display: block !important; }
+  .arq-cuadre .print-only.firma { display: flex !important; flex-direction: column; gap: 22px; margin-top: 28px; }
+  .stats-row { break-inside: avoid; }
+  .hist-row { cursor: default; }
+}

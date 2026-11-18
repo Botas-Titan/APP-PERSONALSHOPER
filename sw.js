@@ -2,7 +2,7 @@
    Estrategia: "network-first" para el contenido propio (siempre lo más nuevo
    cuando hay internet) con respaldo en caché para funcionar sin conexión.
    Firebase / CDNs pasan directo a la red. */
-const CACHE = "armadiusa-v4";
+const CACHE = "armadiusa-v5";
 const ASSETS = [
   "./", "./index.html", "./styles.css", "./app.js", "./logo.svg",
   "./firebase-config.js", "./manifest.webmanifest",
