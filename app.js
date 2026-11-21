@@ -1470,14 +1470,30 @@ async function addAbono(id) {
   if (paraOrden > 0) abonos.push({ monto: paraOrden, fecha: Date.now(), medio });
   const total = abonos.reduce((a, x) => a + (Number(x.monto) || 0), 0);
   const cli = CLIENTS.find(c => c.numero === (o.cliente || {}).numero);
-  const nuevoCredito = (excedente > 0 && cli) ? (Number(cli.creditoFavor) || 0) + excedente : null;
+  // El excedente se reparte primero entre los otros pedidos pendientes del cliente (mismo orden que el
+  // abono general); solo lo que sobre después queda como saldo a favor.
+  const cambios = {}; let pool = excedente;
+  if (pool > 0) {
+    const otros = ORDERS.filter(x => x.id !== id && (x.cliente || {}).numero === (o.cliente || {}).numero && !isArchived(x) && saldoDe(x) > 0)
+      .sort((a, b) => (prioridadAbono(a) - prioridadAbono(b)) || (tsMillis(a.createdAt) - tsMillis(b.createdAt)));
+    for (const x of otros) {
+      if (pool <= 0) break;
+      const pay = Math.min(pool, saldoDe(x));
+      const ab = getAbonos(x).slice(); ab.push({ monto: pay, fecha: Date.now(), tipo: "general", medio });
+      cambios[x.id] = ab; pool -= pay;
+    }
+  }
+  const aOtros = excedente - pool;
+  const nuevoCredito = (pool > 0 && cli) ? (Number(cli.creditoFavor) || 0) + pool : null;
+  const avisoExc = () => { if (excedente > 0) alert(`Se aplicó ${COP(paraOrden)} a este pedido` + (aOtros > 0 ? `, ${COP(aOtros)} a otros pedidos pendientes del cliente` : "") + (pool > 0 ? ` y ${COP(pool)} quedó como saldo a favor.` : ".")); };
 
   if (!FIREBASE_READY) {
     const i = ORDERS.findIndex(x => x.id === id);
     ORDERS[i].abonos = abonos; ORDERS[i].abono = total; ORDERS[i].updatedAt = Date.now();
+    Object.keys(cambios).forEach(cid => { const k = ORDERS.findIndex(x => x.id === cid); if (k >= 0) { ORDERS[k].abonos = cambios[cid]; ORDERS[k].abono = cambios[cid].reduce((s, y) => s + (Number(y.monto) || 0), 0); ORDERS[k].updatedAt = Date.now(); } });
     if (nuevoCredito != null) { const ci = CLIENTS.findIndex(c => c.id === cli.id); if (ci >= 0) CLIENTS[ci].creditoFavor = nuevoCredito; }
     saveLocal(); renderAllLocal();
-    if (excedente > 0) alert(`Se aplicó ${COP(paraOrden)} al pedido y ${COP(excedente)} quedó como saldo a favor del cliente.`);
+    avisoExc();
     openOrderModal(id);
     return;
   }
@@ -1485,9 +1501,11 @@ async function addAbono(id) {
     const batch = db.batch();
     batch.update(db.collection("ordenes").doc(id), {
       abonos, abono: total, updatedAt: firebase.firestore.FieldValue.serverTimestamp() });
+    Object.keys(cambios).forEach(cid => batch.update(db.collection("ordenes").doc(cid), {
+      abonos: cambios[cid], abono: cambios[cid].reduce((s, y) => s + (Number(y.monto) || 0), 0), updatedAt: firebase.firestore.FieldValue.serverTimestamp() }));
     if (nuevoCredito != null) batch.update(db.collection("clientes").doc(cli.id), { creditoFavor: nuevoCredito });
     await batch.commit();
-    if (excedente > 0) alert(`Se aplicó ${COP(paraOrden)} al pedido y ${COP(excedente)} quedó como saldo a favor del cliente.`);
+    avisoExc();
     setTimeout(() => openOrderModal(id), 250);
   } catch (e) { alert("No se pudo registrar el abono: " + e.message); }
 }
@@ -1705,14 +1723,25 @@ async function regresarStatus(o) {
 }
 
 async function deleteOrder(id) {
-  if (!confirm("¿Eliminar esta orden? Esta acción no se puede deshacer.")) return;
+  const o = ORDERS.find(x => x.id === id);
+  // El dinero ya abonado a un pedido que se elimina NO se pierde: pasa a saldo a favor del cliente
+  const abonado = o ? abonoTotal(o) : 0;
+  const cli = o ? CLIENTS.find(c => c.numero === (o.cliente || {}).numero) : null;
+  const devolver = abonado > 0 && cli ? abonado : 0;
+  if (!confirm("¿Eliminar esta orden? Esta acción no se puede deshacer." +
+    (devolver ? `\n\nTiene ${COP(devolver)} abonados: ese dinero pasará a saldo a favor del cliente #${cli.numero}.` : ""))) return;
+  const nuevoCredito = (Number(cli && cli.creditoFavor) || 0) + devolver;
   if (!FIREBASE_READY) {
     ORDERS = ORDERS.filter(o => o.id !== id);
+    if (devolver) { const ci = CLIENTS.findIndex(c => c.id === cli.id); if (ci >= 0) CLIENTS[ci].creditoFavor = nuevoCredito; }
     saveLocal(); renderAllLocal(); closeModal();
     return;
   }
   try {
-    await db.collection("ordenes").doc(id).delete();
+    const batch = db.batch();
+    batch.delete(db.collection("ordenes").doc(id));
+    if (devolver) batch.update(db.collection("clientes").doc(cli.id), { creditoFavor: nuevoCredito });
+    await batch.commit();
     db.collection("clientes").doc("_foto_" + id).delete().catch(() => {});
     closeModal();
   } catch (e) { alert("No se pudo eliminar: " + e.message); }
@@ -2127,7 +2156,7 @@ function renderClientsTable() {
       <tbody>
         ${list.map(c => {
           const cuenta = cuentaCliente(c.numero);
-          const saldoTxt = cuenta.saldo > 0 ? `<span class="saldo-tag pend">Debe ${COP(cuenta.saldo)}</span>`
+          const saldoTxt = cuenta.saldo > 0 ? `<span class="saldo-tag pend">Debe ${COP(cuenta.saldo)}</span>${cuenta.creditoStored > 0 && cuenta.deuda > cuenta.saldo ? `<br><small>Pedidos ${COP(cuenta.deuda)} − ${COP(cuenta.creditoStored)} a favor</small>` : ""}`
             : cuenta.credito > 0 ? `<span class="saldo-tag favor">A favor ${COP(cuenta.credito)}</span>`
             : `<span class="saldo-tag paid">Al día ✓</span>`;
           return `<tr>
@@ -2278,7 +2307,7 @@ function cuentaCliente(numero) {
   const sobreAbono = orders.reduce((a, o) => a + Math.max(0, -saldoDe(o)), 0);  // datos antiguos con sobre-abono
   const net = deuda - creditoStored - sobreAbono;   // >0 debe · <0 a favor
   return {
-    orders, allOrders, valor, abonado, count: enProceso.length, cli, creditoStored,
+    orders, allOrders, valor, abonado, deuda, count: enProceso.length, cli, creditoStored,
     saldo: Math.max(0, net), credito: Math.max(0, -net),
   };
 }
@@ -2341,8 +2370,10 @@ function openClientAccount(numero) {
     <div class="detail-section-title">Resumen</div>
     <div class="detail-row"><span class="k">Total productos (${q.orders.length})</span><span>${COP(q.valor)}</span></div>
     ${abonadoRow}
+    ${q.creditoStored > 0 ? `<div class="detail-row"><span class="k">Saldo a favor del cliente (sin aplicar a un pedido)</span><span style="color:var(--green,#16a34a)">− ${COP(q.creditoStored)}</span></div>` : ""}
     ${saldoLine}
 
+    ${q.creditoStored > 0 && pendientes.length ? `<div class="file-note" style="margin:6px 0"><b>¿Por qué el total es menor que lo que debe cada pedido?</b><br>Los pedidos suman ${COP(q.deuda)} de deuda, pero el cliente tiene ${COP(q.creditoStored)} a favor (dinero que pagó de más antes y no se había aplicado a un pedido). Total: ${COP(q.deuda)} − ${COP(q.creditoStored)} = <b>${COP(q.saldo)}</b>. Al pulsar el botón, ese dinero se descuenta de los pedidos y todo queda igual en ambos lados.</div><button class="btn-secondary" id="aplicarCreditoBtn" type="button">✅ Aplicar saldo a favor a los pedidos pendientes</button>` : ""}
     <div class="detail-section-title">Pedidos</div>
     ${rows}
 
@@ -2365,6 +2396,8 @@ function openClientAccount(numero) {
   const inp = m.querySelector("#abonoGeneralInput");
   if (inp) inp.addEventListener("input", e => { e.target.value = fmtThousands(e.target.value); });
   m.querySelector("#aplicarAbonoGeneral").addEventListener("click", () => aplicarAbonoGeneral(numero));
+  const acb = m.querySelector("#aplicarCreditoBtn");
+  if (acb) acb.addEventListener("click", () => aplicarCreditoCuenta(numero));
   m.querySelectorAll("[data-acc-edit]").forEach(b => b.addEventListener("click", () => {
     const [oid, i] = b.dataset.accEdit.split("|");
     editAbono(oid, Number(i), () => setTimeout(() => openClientAccount(numero), 250));
@@ -2372,6 +2405,41 @@ function openClientAccount(numero) {
   m.querySelector("#accountPrintBtn").addEventListener("click", () => printAccountInvoice(numero));
   const wab = m.querySelector("#accountWaBtn");
   if (wab) wab.addEventListener("click", () => whatsappAccountInvoice(numero));
+}
+
+// Aplica el saldo a favor guardado del cliente a sus pedidos pendientes (mismo orden que el abono general).
+// Queda registrado en cada pedido como abono "saldo a favor" (no cuenta como dinero recibido en el arqueo).
+async function aplicarCreditoCuenta(numero) {
+  const q = cuentaCliente(numero);
+  let pool = Number(q.creditoStored) || 0;
+  if (pool <= 0) return;
+  const pendientes = q.orders.filter(o => saldoDe(o) > 0)
+    .sort((a, b) => (prioridadAbono(a) - prioridadAbono(b)) || (tsMillis(a.createdAt) - tsMillis(b.createdAt)));
+  const cambios = [];
+  for (const o of pendientes) {
+    if (pool <= 0) break;
+    const pay = Math.min(pool, saldoDe(o));
+    if (pay <= 0) continue;
+    const abonos = getAbonos(o).slice(); abonos.push({ monto: pay, fecha: Date.now(), tipo: "credito" });
+    cambios.push({ id: o.id, abonos, total: abonos.reduce((a, x) => a + (Number(x.monto) || 0), 0) });
+    pool -= pay;
+  }
+  if (!cambios.length) return;
+  if (!confirm(`Se aplicarán ${COP((Number(q.creditoStored) || 0) - pool)} del saldo a favor a los pedidos pendientes. ¿Continuar?`)) return;
+  try {
+    if (!FIREBASE_READY) {
+      cambios.forEach(ch => { const i = ORDERS.findIndex(o => o.id === ch.id); if (i >= 0) { ORDERS[i].abonos = ch.abonos; ORDERS[i].abono = ch.total; } });
+      if (q.cli.id) { const ci = CLIENTS.findIndex(c => c.id === q.cli.id); if (ci >= 0) CLIENTS[ci].creditoFavor = pool; }
+      saveLocal(); renderAllLocal();
+    } else {
+      const batch = db.batch();
+      cambios.forEach(ch => batch.update(db.collection("ordenes").doc(ch.id), {
+        abonos: ch.abonos, abono: ch.total, updatedAt: firebase.firestore.FieldValue.serverTimestamp() }));
+      if (q.cli.id) batch.update(db.collection("clientes").doc(q.cli.id), { creditoFavor: pool });
+      await batch.commit();
+    }
+    setTimeout(() => openClientAccount(numero), 400);
+  } catch (e) { alert("No se pudo aplicar el saldo a favor: " + e.message); }
 }
 
 // Reparte un abono general entre los pedidos pendientes; el sobrante → saldo a favor
