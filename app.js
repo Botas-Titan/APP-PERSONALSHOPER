@@ -2704,10 +2704,12 @@ function setupHistorialTabs() {
     renderHistorialTabs();
   }));
   document.getElementById("searchCajas").addEventListener("input", renderCajasRecibidas);
-  const f = document.getElementById("comprasFecha");
-  f.addEventListener("change", renderComprasPorFecha);
-  document.getElementById("comprasHoy").addEventListener("click", () => { f.value = ymd(Date.now()); renderComprasPorFecha(); });
-  document.getElementById("comprasAyer").addEventListener("click", () => { f.value = ymd(Date.now() - 86400000); renderComprasPorFecha(); });
+  const d = document.getElementById("comprasDesde");
+  const h = document.getElementById("comprasHasta");
+  d.addEventListener("change", renderComprasPorFecha);
+  h.addEventListener("change", renderComprasPorFecha);
+  document.getElementById("comprasHoy").addEventListener("click", () => { d.value = h.value = ymd(Date.now()); renderComprasPorFecha(); });
+  document.getElementById("comprasAyer").addEventListener("click", () => { d.value = h.value = ymd(Date.now() - 86400000); renderComprasPorFecha(); });
 }
 function renderHistorialTabs() {
   document.querySelectorAll(".hist-tab").forEach(t => t.classList.toggle("active", t.dataset.htab === histTab));
@@ -2716,8 +2718,10 @@ function renderHistorialTabs() {
   if (histTab === "entregados") renderHistorial();
   if (histTab === "cajas") renderCajasRecibidas();
   if (histTab === "compras") {
-    const f = document.getElementById("comprasFecha");
-    if (!f.value) f.value = ymd(Date.now());
+    const d = document.getElementById("comprasDesde");
+    const h = document.getElementById("comprasHasta");
+    if (!d.value) d.value = ymd(Date.now());
+    if (!h.value) h.value = ymd(Date.now());
     renderComprasPorFecha();
   }
 }
@@ -2784,26 +2788,40 @@ function renderCajasRecibidas() {
   wrap.querySelectorAll("[data-eye]").forEach(b => b.addEventListener("click", e => { e.stopPropagation(); openOrderModal(b.dataset.eye); }));
 }
 
-// Productos comprados en una fecha específica
+// Productos comprados en un rango de fechas (Desde - Hasta)
 function renderComprasPorFecha() {
   const wrap = document.getElementById("comprasWrap");
-  const fecha = document.getElementById("comprasFecha").value;
+  let desde = document.getElementById("comprasDesde").value;
+  let hasta = document.getElementById("comprasHasta").value;
   if (!wrap) return;
-  if (!fecha) { wrap.innerHTML = `<div class="empty-box">Elige una fecha.</div>`; return; }
-  const lista = ORDERS.filter(o => compraTs(o) && ymd(compraTs(o)) === fecha)
+  if (!desde && !hasta) { wrap.innerHTML = `<div class="empty-box">Elige una fecha de inicio y una fecha de fin.</div>`; return; }
+  if (!desde) desde = hasta;
+  if (!hasta) hasta = desde;
+  if (desde > hasta) { const t = desde; desde = hasta; hasta = t; } // por si las ponen al revés
+  const fmtF = x => x.split("-").reverse().join("/");
+  const rango = desde === hasta ? fmtF(desde) : fmtF(desde) + " al " + fmtF(hasta);
+  const lista = ORDERS.filter(o => compraTs(o) && ymd(compraTs(o)) >= desde && ymd(compraTs(o)) <= hasta)
     .sort((a, b) => compraTs(a) - compraTs(b));
   const isAdmin = CURRENT.role === "admin";
-  if (!lista.length) { wrap.innerHTML = `<div class="empty-box">No se registraron compras el ${fecha.split("-").reverse().join("/")}.</div>`; return; }
+  if (!lista.length) { wrap.innerHTML = `<div class="empty-box">No se registraron compras del ${rango}.</div>`; return; }
   const totalUsd = lista.reduce((a, o) => a + (Number(o.costoUsd) || 0), 0);
-  wrap.innerHTML = `
+  // Agrupar por día de compra (el más reciente primero)
+  const grupos = {};
+  lista.forEach(o => { const k = ymd(compraTs(o)); (grupos[k] = grupos[k] || []).push(o); });
+  const dias = Object.keys(grupos).sort().reverse();
+  const resumen = dias.length > 1 ? `<p class="section-note">${rango}: <strong>${lista.length}</strong> producto(s) comprados${isAdmin ? " · " + USD(totalUsd) : ""}</p>` : "";
+  wrap.innerHTML = resumen + dias.map(dia => {
+    const items = grupos[dia];
+    const diaUsd = items.reduce((a, o) => a + (Number(o.costoUsd) || 0), 0);
+    return `
     <div class="hist-day">
       <div class="hist-day-head">
-        <span>${fmtDay(compraTs(lista[0]))}</span>
-        <span class="hist-count">${lista.length} producto(s) comprados${isAdmin ? " · " + USD(totalUsd) : ""}</span>
+        <span>${fmtDay(compraTs(items[0]))}</span>
+        <span class="hist-count">${items.length} producto(s) comprados${isAdmin ? " · " + USD(diaUsd) : ""}</span>
       </div>
       <div class="table-wrap"><table>
         <thead><tr><th>N°</th><th>Cliente</th><th>Producto</th><th>Tienda</th><th>Tipo</th><th>Estado hoy</th>${isAdmin ? "<th>Costo USD</th>" : ""}</tr></thead>
-        <tbody>${lista.map(o => { const c = o.cliente || {}; return `
+        <tbody>${items.map(o => { const c = o.cliente || {}; return `
           <tr class="hist-row" data-id="${o.id}">
             <td>#${c.numero ?? "—"}</td><td>${escapeHtml(c.nombre || "")}</td><td>${escapeHtml(o.productName)}</td>
             <td>${escapeHtml(o.tienda || "")}</td>
@@ -2813,6 +2831,7 @@ function renderComprasPorFecha() {
           </tr>`; }).join("")}</tbody>
       </table></div>
     </div>`;
+  }).join("");
   wrap.querySelectorAll(".hist-row").forEach(r => r.addEventListener("click", () => openOrderModal(r.dataset.id)));
 }
 
